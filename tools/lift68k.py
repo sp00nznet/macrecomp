@@ -294,12 +294,23 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("segfile"); ap.add_argument("--seg",type=int,required=True)
     ap.add_argument("--jt",required=True); ap.add_argument("-o","--out",default="src/gen")
+    ap.add_argument("--entry",default="",help="extra function offsets, comma-sep hex (e.g. 0x3838)")
     a=ap.parse_args(); os.makedirs(a.out,exist_ok=True)
     raw=open(a.segfile,"rb").read(); code=raw[4:]     # skip 4-byte seg header
     jt=json.load(open(a.jt))
-    offs=sorted({e["offset"] for e in jt["entries"] if e["thunk"] and e["segment"]==a.seg})
-    offs=[o-4 if o>=4 else o for o in offs]           # jt offset is into code incl header; our code[] already dropped it? keep simple:
-    offs=sorted({max(0,o) for o in [e["offset"] for e in jt["entries"] if e["thunk"] and e["segment"]==a.seg]})
+    # function starts = jump-table entries for this segment + every intra-segment
+    # bsr/jsr call target (local subroutines that have no jump-table entry).
+    starts={e["offset"] for e in jt["entries"] if e["thunk"] and e["segment"]==a.seg}
+    for ins in md.disasm(code, 0):
+        if ins.id and ins.mnemonic.split(".")[0] in ("bsr","jsr"):
+            op=ins.op_str.strip(); t=btarget(op)
+            if t is None:                                  # pc-relative call target
+                mm=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc\)",op)
+                if mm: t=int(mm.group(1).replace("$","0x"),0)&0xFFFFFFFF
+            if t is not None and 0<=t<len(code): starts.add(t)
+    for tok in a.entry.split(","):
+        if tok.strip(): starts.add(int(tok,0))
+    offs=sorted(x for x in starts if x<len(code))
     bounds=list(zip(offs, offs[1:]+[len(code)]))
     fns=[]
     for start,end in bounds:

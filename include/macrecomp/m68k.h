@@ -98,6 +98,7 @@ typedef void (*m68k_fn)(void);
 void m68k_register(uint32_t addr, m68k_fn fn);
 void m68k_call(uint32_t addr);     /* resolve + invoke (jsr/bsr to a known target) */
 void m68k_jt_call(uint32_t a5off); /* call through the A5 jump table (jsr d(a5)) */
+void m68k_jt_set(uint32_t a5off, uint32_t addr); /* loader wires a5 offset -> code addr */
 
 /* trap raised by the lifter for an instruction it could not translate */
 void m68k_unimplemented(const char *what, uint32_t addr);

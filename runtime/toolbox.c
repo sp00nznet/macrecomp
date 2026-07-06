@@ -8,6 +8,7 @@
 #include "macrecomp/toolbox.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* ---- Pascal stack helpers ---- */
 static uint16_t pop16(void){ uint16_t v=(uint16_t)m68k_r16(SP); SP+=2; return v; }
@@ -22,7 +23,7 @@ static void wr_rect(uint32_t p,const Rect*r){ m68k_w16(p,r->top); m68k_w16(p+2,r
 
 /* ---- bump heap inside M.mem (NewPtr/NewHandle) ---- */
 static uint32_t heap_ptr = 0, heap_end = 0;
-static void heap_init(void){ heap_ptr = 0x200000; heap_end = 0x600000; }  /* 2MB..6MB */
+static void heap_init(void){ heap_ptr = 0x00800000; heap_end = 0x01E00000; }  /* 8..30 MB */
 static uint32_t heap_alloc(uint32_t sz){ sz=(sz+3)&~3u; if(heap_ptr+sz>=heap_end) return 0;
     uint32_t p=heap_ptr; heap_ptr+=sz; for(uint32_t i=0;i<sz;i++) M.mem[p+i]=0; return p; }
 
@@ -41,6 +42,7 @@ static void logtrap(uint16_t w){
 
 void m68k_trap(uint16_t raw){
     uint16_t w = norm(raw);
+    if(getenv("MRTRACE")){ static long n=0; fprintf(stderr,"[%5ld] $%04X\n", n++, w); }
     switch(w){
     /* ---- init (mostly no-ops for us) ---- */
     case 0xA86E: /*InitGraf*/ (void)pop32(); break;      /* arg: globalsPtr */
@@ -49,6 +51,7 @@ void m68k_trap(uint16_t raw){
     case 0xA036: /*MoreMasters*/ break;
     case 0xA97B: /*InitDialogs*/ (void)pop32(); break;   /* arg: resumeProc */
     case 0xA032: /*FlushEvents*/ (void)pop32(); break;
+    case 0xA9F4: /*ExitToShell*/ fprintf(stderr,"[ExitToShell]\n"); plat_present(); exit(0);
 
     /* ---- QuickDraw: pen & text state ---- */
     case 0xA873: /*SetPort*/ (void)pop32(); break;
@@ -101,6 +104,8 @@ void m68k_trap(uint16_t raw){
     case 0xA974: /*Button*/ push16(plat_button()?1:0); break;
     case 0xA973: /*StillDown*/ push16(plat_button()?1:0); break;
     case 0xA970: /*GetNextEvent*/ case 0xA971: /*EventAvail*/ {
+        plat_present();                       /* reaching the event loop == booted */
+        if(plat_quit_requested()) exit(0);
         (void)pop16(); uint32_t evp=pop32(); int what=0,msg=0,h=0,v=0;
         plat_pump(); int got=plat_next_event(&what,&msg,&h,&v);
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
