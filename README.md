@@ -81,8 +81,9 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
 | `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL) | ✅ **98–100% instruction coverage** |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
-| runtime: QuickDraw → SDL2 (CopyBits, PICT, regions) | the video HAL | ⬜ |
-| runtime: Event/Menu/Window/Dialog + Sound Mgr | the OS HAL | ⬜ |
+| runtime `quickdraw.c` + `platform_sdl.c`: 1-bit framebuffer + pen/rect/line/oval/text/CopyBits → SDL2 window | the video HAL | ✅ core (self-tested) |
+| runtime `toolbox.c`: A-trap dispatch (Pascal + register conventions), Memory Mgr bump heap, thin Event Mgr | the OS HAL | 🟡 ~50 core traps; rest log |
+| Menu/Window/Dialog managers · Sound (ASND) | | ⬜ |
 
 First customer: [**shufflepuck-cafe**](https://github.com/sp00nznet/shufflepuck-cafe)
 (Broderbund, 1988) — 6 CODE segments, ~52 KB of 68k, B&W QuickDraw.
