@@ -74,9 +74,11 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | Component | What it does | State |
 |-----------|--------------|-------|
 | `extract_resources.py` | DiskCopy 4.2 / raw HFS → CODE segments, asset catalog, `inventory.json` | ✅ working |
-| `disasm_code.py` | capstone-M68K disassembly of a CODE segment | 🔨 next |
-| `scan_traps.py` | enumerate the A-line (`$Axxx`) Toolbox traps a binary calls | 🔨 next |
+| `disasm_code.py` | capstone-M68K disassembly, annotated with traps + A5 jump-table calls | ✅ working |
+| `scan_traps.py` | enumerate A-line (`$Axxx`) Toolbox traps; parse the CODE 0 jump table | ✅ working (validated on Finder) |
+| `traps.json` | 1177 trap word↔name mappings (Inside Macintosh) for the two tools above | ✅ |
 | `lift68k.py` | mechanical 68k → C lifter | ⬜ |
+| `unprotect.py` | unpack self-decrypting/protected CODE (dynamic snapshot or static) | 🔨 first customer needs it |
 | runtime: m68k state + A5 world + resource mgr | the execution substrate | ⬜ |
 | runtime: QuickDraw → SDL2 (CopyBits, PICT, regions) | the video HAL | ⬜ |
 | runtime: Event/Menu/Window/Dialog + Sound Mgr | the OS HAL | ⬜ |

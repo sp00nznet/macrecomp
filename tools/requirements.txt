@@ -1,0 +1,4 @@
+# macrecomp dig-kit dependencies (pure-Python + capstone)
+macresources   # resource-fork parsing
+machfs         # HFS volume / DiskCopy mounting
+capstone       # M68K disassembly
