@@ -1,0 +1,22 @@
+# build output
+build/
+out/
+.vs/
+CMakeSettings.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# extraction scratch (regeneratable; may contain copyrighted app data)
+work/
+*.dc42
+*.img
+*.dsk
+*.moof
+
+# editor
+.idea/
+*.swp
+.DS_Store
