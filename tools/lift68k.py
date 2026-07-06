@@ -248,7 +248,7 @@ def emit(ins, targets):
     elif base=="jmp":
         t=btarget(ops[0])
         if t is not None: C.append(f"goto L{t:x};"); term=True; targets.add(t)
-        else: C.append(indirect_call(ops[0]) or unimpl(ins)); term=True
+        else: C.append(indirect_call(ops[0]) or unimpl(ins)); C.append("return;"); term=True
     elif base=="rts": C.append("return;"); term=True
     elif base=="nop": C.append(";")
     elif base=="bra": t=btarget(ops[0]); C.append(f"goto L{t:x};"); term=True; targets.add(t)
@@ -302,12 +302,16 @@ def main():
     # bsr/jsr call target (local subroutines that have no jump-table entry).
     starts={e["offset"] for e in jt["entries"] if e["thunk"] and e["segment"]==a.seg}
     for ins in md.disasm(code, 0):
-        if ins.id and ins.mnemonic.split(".")[0] in ("bsr","jsr"):
-            op=ins.op_str.strip(); t=btarget(op)
-            if t is None:                                  # pc-relative call target
-                mm=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc\)",op)
-                if mm: t=int(mm.group(1).replace("$","0x"),0)&0xFFFFFFFF
+        if not ins.id: continue
+        mn=ins.mnemonic.split(".")[0]; op=ins.op_str.strip()
+        pcrel=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc\)",op)
+        if mn in ("bsr","jsr"):
+            t=btarget(op)
+            if t is None and pcrel: t=int(pcrel.group(1).replace("$","0x"),0)&0xFFFFFFFF
             if t is not None and 0<=t<len(code): starts.add(t)
+        elif mn=="jmp" and pcrel:                          # tail-call jmp $x(pc)
+            t=int(pcrel.group(1).replace("$","0x"),0)&0xFFFFFFFF
+            if 0<=t<len(code): starts.add(t)
     for tok in a.entry.split(","):
         if tok.strip(): starts.add(int(tok,0))
     offs=sorted(x for x in starts if x<len(code))

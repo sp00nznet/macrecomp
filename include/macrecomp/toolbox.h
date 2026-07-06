@@ -13,6 +13,7 @@
 #define QD_H 342
 
 void toolbox_init(void);   /* qd_init + heap; call once after M.mem is allocated */
+void res_add(const char *type, int id, const uint8_t *data, int len);  /* register a resource */
 
 typedef struct { int16_t top, left, bottom, right; } Rect;   /* Mac field order */
 typedef struct { int16_t v, h; } Point;

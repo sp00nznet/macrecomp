@@ -83,8 +83,8 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL) | ✅ **98–100% instruction coverage** |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
 | runtime `quickdraw.c` + `platform_sdl.c`: 1-bit framebuffer + pen/rect/line/oval/text/CopyBits → SDL2 window | the video HAL | ✅ core (self-tested) |
-| runtime `toolbox.c`: A-trap dispatch (Pascal + register conventions), Memory Mgr bump heap, thin Event Mgr | the OS HAL | 🟡 ~50 core traps; rest log |
-| Menu/Window/Dialog managers · Sound (ASND) | | ⬜ |
+| runtime `toolbox.c`: A-trap dispatch, Resource Mgr (serves the app's resources), QuickDraw incl. **CopyBits + DrawPicture**, Window/Menu/Dialog/File stubs, Memory Mgr heap | the OS HAL | 🟢 ~95 traps; boots real games |
+| Sound (ASND) · full Menu/Dialog interaction | | ⬜ |
 
 First customer: [**shufflepuck-cafe**](https://github.com/sp00nznet/shufflepuck-cafe)
 (Broderbund, 1988) — 6 CODE segments, ~52 KB of 68k, B&W QuickDraw.
