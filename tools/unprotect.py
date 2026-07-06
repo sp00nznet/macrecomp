@@ -1,113 +1,126 @@
 #!/usr/bin/env python3
-"""Unpack a self-decrypting classic-Mac app (static, reproducible).
+"""Statically unpack a self-decrypting classic-Mac app (no emulator needed).
 
-Reverses the runtime decryptor that ships in a plaintext CODE segment, so the
-encrypted CODE resources can be disassembled/lifted without executing anything.
-Currently implements the scheme used by *Shufflepuck Cafe* (Broderbund 1988,
-"HLS Duplication" protection); the transforms are parameterised so sibling
-titles can be added.
+Reverses the runtime decryptor that ships in a plaintext CODE segment, recovering
+the plaintext CODE resources for disassembly/lifting. Implements the scheme used
+by *Shufflepuck Cafe* (Broderbund 1988, "HLS Duplication" protection), fully
+reverse-engineered — see the game repo's docs/PROTECTION.md.
 
-Confirmed stages (see the game repo's docs/PROTECTION.md for the full RE):
-  * Stage 1 — the loader self-decrypts a local key/string table by word-negation.
-  * Jump table — CODE 0's entries 1..N are decrypted in the A5 world by an
-    `eor <key>` + additive forward chain (key $F55C for Shufflepuck). This
-    recovers the full function directory (every routine's segment + offset).
+The scheme, all confirmed (byte-exact vs a Ghidra p-code emulation of the real
+handler):
+  1. Jump table (CODE 0): entries 1..N decrypted by  next += (cur ^ JT_KEY),
+     a forward additive chain (JT_KEY = $F55C). Recovers the function directory
+     AND the embedded _GetResource decrypt-handler (in the A5 world).
+  2. Each CODE body is decrypted by that handler:
+       seed = (header_word with bit14 cleared) ^ resourceID     # its `bclr #6`
+       K    = crc16(seed, key_material = handler code $750..$868, poly $32E6)
+       body: for size/2-2 words from CODE+2:  next += (cur ^ K)   (skip cur==0)
 
-Not yet reversed (WIP): the second decryptor pass that finishes the tail
-jump-table entries, and the per-segment body cipher (seeded by each encrypted
-segment's header word, e.g. CODE 1 header $400A). Those still need tracing.
+Per-title constants live in PROFILE; the algorithm is general.
 
 Usage:  python unprotect.py work/code -o work/unpacked
 """
 import argparse, glob, json, os, re, struct
+from collections import Counter
 
-JT_KEY = 0xF55C   # Shufflepuck jump-table decrypt key
+PROFILE = {                       # Shufflepuck Cafe
+    "jt_key":       0xF55C,
+    "crc_poly":     0x32E6,
+    "km_start":     0x750,        # key-material region in the A5 world (jump table + handlers)
+    "km_end":       0x868,        # (= the _GetResource handler's own code)
+    "a5_jt_off":    0x20,         # jump table offset from A5 (CODE 0 header field)
+    "enc_segments": (1, 2, 3, 5), # encrypted via the handler (0 = jump table, 4 = plaintext loader)
+}
 
 
 def u16(b, o): return struct.unpack_from(">H", b, o)[0]
 
 
-def decrypt_jump_table(code0, key=JT_KEY):
-    """CODE 0 -> (decrypted bytes, list of entries). Entry 0 is plaintext; the
-    rest are recovered by the eor+add forward chain over the A5-world copy."""
+def decrypt_jump_table(code0, key):
     above, below, jtlen, jtoff = struct.unpack(">IIII", code0[:16])
     body = bytearray(code0[16:])
     w = list(struct.unpack(">%dH" % (len(body) // 2), body[: len(body) // 2 * 2]))
-    start = 8 // 2                      # first word of entry 1 (A5+0x28)
-    n_words = (jtlen - 8) // 2          # all entries except entry 0
-    for k in range(n_words):
-        i = start + k
+    for k in range((jtlen - 8) // 2):
+        i = (8 // 2) + k                    # start at entry 1 (A5+0x28)
         if i + 1 >= len(w):
             break
-        d3 = (w[i] ^ key) & 0xFFFF
-        w[i + 1] = (w[i + 1] + d3) & 0xFFFF
-    dec = bytearray()
-    for x in w:
-        dec += struct.pack(">H", x)
+        w[i + 1] = (w[i + 1] + ((w[i] ^ key) & 0xFFFF)) & 0xFFFF
+    dec = b"".join(struct.pack(">H", x) for x in w)
     entries = []
     for e in range(jtlen // 8):
-        off = e * 8
-        if off + 8 > len(dec):
-            break
-        o, push, seg, trap = struct.unpack(">HHHH", dec[off:off + 8])
+        o, push, seg, trap = struct.unpack(">HHHH", dec[e * 8:e * 8 + 8])
         entries.append({"idx": e, "offset": o, "segment": seg,
-                        "valid": bool(push == 0x3F3C and trap == 0xA9F0 and 1 <= seg <= 15)})
-    return bytes(struct.pack(">IIII", above, below, jtlen, jtoff)) + bytes(dec), entries
+                        "thunk": bool(push == 0x3F3C and trap == 0xA9F0 and 1 <= seg <= 15)})
+    return struct.pack(">IIII", above, below, jtlen, jtoff) + dec, entries, jtoff
 
 
-def unnegate_table(code4, lo=0x02, hi=0x42):
-    """Stage 1: undo the loader's word-negation of its local table (CODE 4)."""
-    seg = bytearray(code4[4:])         # drop 4-byte seg header
-    for off in range(lo, hi, 2):
-        seg[off:off + 2] = struct.pack(">H", (-u16(seg, off)) & 0xFFFF)
-    strings = re.findall(rb"[\x20-\x7e]{4,}", bytes(seg))
-    return bytes(seg), [s.decode("mac_roman") for s in strings]
+def crc16(seed, key_material_words, poly):
+    """16-bit CRC the handler computes over its own code to derive a body key."""
+    d0 = seed & 0xFFFF
+    for hw in key_material_words:
+        d1 = hw & 0xFFFF
+        for _ in range(16):
+            x = (d1 >> 15) & 1; d1 = (d1 << 1) & 0xFFFF   # lsl.w #1,d1
+            d0 ^= (x << 15)                               # (moveq#0,d2; roxr; eor.w d2,d0)
+            c = (d0 >> 15) & 1; d0 = (d0 << 1) & 0xFFFF   # lsl.w #1,d0
+            if c: d0 ^= poly                              # eor.w d3,d0
+    return d0 & 0xFFFF
+
+
+def decrypt_segment(raw, resid, key_material_words, poly):
+    w = list(struct.unpack(">%dH" % (len(raw) // 2), raw[: len(raw) // 2 * 2]))
+    w[1] &= ~0x4000                                       # bclr #6 of header high byte
+    K = crc16((w[1] ^ resid) & 0xFFFF, key_material_words, poly)
+    a0 = 1
+    for _ in range(len(raw) // 2 - 2):
+        cur = w[a0]; a0 += 1
+        if cur != 0:
+            w[a0] = (w[a0] + ((cur ^ K) & 0xFFFF)) & 0xFFFF
+    return b"".join(struct.pack(">H", x) for x in w), K
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("code_dir", help="dir of CODE_*.bin from extract_resources.py")
+    ap.add_argument("code_dir")
     ap.add_argument("-o", "--out", default="unpacked")
-    ap.add_argument("--key", type=lambda x: int(x, 0), default=JT_KEY)
+    p = PROFILE
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    def seg_id(p): return int(re.search(r"(\d+)", os.path.basename(p)).group(1))
-    files = {seg_id(f): f for f in glob.glob(os.path.join(args.code_dir, "CODE_*.bin"))}
+    def sid(f): return int(re.search(r"(\d+)", os.path.basename(f)).group(1))
+    files = {sid(f): f for f in glob.glob(os.path.join(args.code_dir, "CODE_*.bin"))}
 
-    # --- jump table (CODE 0) ---
-    c0 = open(files[0], "rb").read()
-    dec0, entries = decrypt_jump_table(c0, args.key)
+    # 1. jump table -> function directory + the A5 world (contains the handler)
+    dec0, entries, jtoff = decrypt_jump_table(open(files[0], "rb").read(), p["jt_key"])
     open(os.path.join(args.out, "CODE_0.dec.bin"), "wb").write(dec0)
-    valid = [e for e in entries if e["valid"]]
-    from collections import Counter
-    dist = Counter(e["segment"] for e in valid)
-    json.dump({"key": f"0x{args.key:04X}", "n_entries": len(entries),
-               "n_valid": len(valid), "per_segment": dict(sorted(dist.items())),
-               "entries": entries},
+    a5 = dec0[16:]                                        # A5+jtoff == a5[0]
+    km = a5[p["km_start"] - jtoff: p["km_end"] - jtoff]   # CRC key material (handler code)
+    km_words = list(struct.unpack(">%dH" % (len(km) // 2), km))
+    thunks = [e for e in entries if e["thunk"]]
+    dist = Counter(e["segment"] for e in thunks)
+    json.dump({"n_entries": len(entries), "n_functions": len(thunks),
+               "per_segment": dict(sorted(dist.items())), "entries": entries},
               open(os.path.join(args.out, "jumptable.json"), "w"), indent=2)
-    print(f"jump table: {len(valid)}/{len(entries)} valid thunks  "
-          f"per-segment {dict(sorted(dist.items()))}")
+    print(f"jump table: {len(thunks)} functions  per-segment {dict(sorted(dist.items()))}")
 
-    # --- Stage 1 table (CODE 4), if present & plaintext loader ---
-    if 4 in files:
-        seg4, strings = unnegate_table(open(files[4], "rb").read())
-        open(os.path.join(args.out, "CODE_4.table.bin"), "wb").write(seg4)
-        hit = [s for s in strings if "Shuffle" in s or "Duplication" in s]
-        print(f"stage-1 table: strings {hit or strings[:3]}")
+    # 2. decrypt each encrypted CODE body
+    keys = {}
+    for s in p["enc_segments"]:
+        if s not in files:
+            continue
+        body, K = decrypt_segment(open(files[s], "rb").read(), s, km_words, p["crc_poly"])
+        open(os.path.join(args.out, f"CODE_{s}.dec.bin"), "wb").write(body)
+        keys[s] = K
+        print(f"CODE {s}: key=${K:04X} -> CODE_{s}.dec.bin")
+    if 4 in files:                                        # plaintext loader, copied through
+        import shutil; shutil.copy(files[4], os.path.join(args.out, "CODE_4.dec.bin"))
 
-    # --- encrypted segment bodies (WIP) ---
-    print("segment body cipher (WIP) - per-segment header key words:")
-    for sid in sorted(s for s in files if s not in (0, 4)):
-        hdr = open(files[sid], "rb").read()[:4]
-        print(f"  CODE {sid}: header {hdr.hex()}  (candidate key ${u16(hdr,2):04X})")
-
-    # --- self-checks ---
-    e1 = entries[1]
-    assert e1["valid"] and e1["segment"] == 1, f"entry1 should be a seg-1 thunk, got {e1}"
-    if 4 in files:
-        assert any("Shufflepuck" in s for s in strings), "stage-1 negation failed"
-    print("self-check OK")
+    # self-checks against known-good keys (byte-exact vs Ghidra emulation)
+    assert entries[1]["thunk"] and entries[1]["segment"] == 1
+    for s, want in {1: 0x02AE, 2: 0xCF4C, 5: 0x4900}.items():
+        if s in keys:
+            assert keys[s] == want, f"CODE {s} key ${keys[s]:04X} != ${want:04X}"
+    print("self-check OK (keys match reference)")
 
 
 if __name__ == "__main__":

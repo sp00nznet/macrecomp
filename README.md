@@ -77,7 +77,8 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `disasm_code.py` | capstone-M68K disassembly, annotated with traps + A5 jump-table calls | ✅ working |
 | `scan_traps.py` | enumerate A-line (`$Axxx`) Toolbox traps; parse the CODE 0 jump table | ✅ working (validated on Finder) |
 | `traps.json` | 1177 trap word↔name mappings (Inside Macintosh) for the two tools above | ✅ |
-| `unprotect.py` | statically unpack self-decrypting/protected CODE | 🟡 jump-table + stage-1 solved; segment-body cipher WIP |
+| `unprotect.py` | statically unpack self-decrypting/protected CODE | ✅ **fully solved** (jump table + segment bodies, byte-exact) |
+| `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
 | `lift68k.py` | mechanical 68k → C lifter | ⬜ |
 | runtime: m68k state + A5 world + resource mgr | the execution substrate | ⬜ |
 | runtime: QuickDraw → SDL2 (CopyBits, PICT, regions) | the video HAL | ⬜ |
