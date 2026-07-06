@@ -222,11 +222,15 @@ def emit(ins, targets):
             C.append(f"{wf}({n},{fn}({rf}({n}),M.d[{m2}]&63,{sz}));")
         else: C.append(unimpl(ins))
     elif base in ("divu","divs"):
-        a=P(ops[0],2); n=dnum(ops[1]); signed=(base=="divs")
-        cast="(int32_t)" if signed else "(uint32_t)"; scast="(int16_t)" if signed else "(uint16_t)"
-        C.append(f"{{ {cast[:-1]} _s={scast}({a.r}); if(_s){{ {cast}int32_t _q=({cast}M.d[{n}])/_s;"
-                 f" {cast}int32_t _r=({cast}M.d[{n}])%_s; SET_DL({n},(((uint32_t)_r&0xffff)<<16)|((uint32_t)_q&0xffff));"
-                 f" fl_logic((uint32_t)_q,2); }} }}")
+        a=P(ops[0],2); n=dnum(ops[1])
+        if base=="divs":
+            C.append(f"{{ int16_t _s=(int16_t)({a.r}); if(_s){{ int32_t _dd=(int32_t)M.d[{n}];"
+                     f" uint32_t _q=(uint32_t)(_dd/_s), _r=(uint32_t)(_dd%_s);"
+                     f" SET_DL({n},((_r&0xffff)<<16)|(_q&0xffff)); fl_logic(_q,2); }} }}")
+        else:
+            C.append(f"{{ uint16_t _s=(uint16_t)({a.r}); if(_s){{ uint32_t _dd=M.d[{n}];"
+                     f" uint32_t _q=_dd/_s, _r=_dd%_s;"
+                     f" SET_DL({n},((_r&0xffff)<<16)|(_q&0xffff)); fl_logic(_q,2); }} }}")
     elif base in ("btst","bset","bclr","bchg"):
         a=P(ops[0]); b=P(ops[1] if len(ops)>1 else ops[0])
         onreg = re.fullmatch(r"\s*d\d\s*",(ops[1] if len(ops)>1 else "")) is not None
@@ -267,9 +271,9 @@ def lift_function(code, seg, start, end):
         emit(ins, targets)
     STAT.clear(); STAT.update(saved)
     # pass 2: emit
-    name=f"fn_{seg}_{start:04x}"; L=[f"void {name}(void){{"]
+    name=f"fn_{seg}_{start:04x}"; L=[f"void {name}(void){{"]; emitted=set()
     for ins in md.disasm(code[start:end], start):
-        if ins.address in targets: L.append(f" L{ins.address:x}:;")
+        if ins.address in targets: L.append(f" L{ins.address:x}:;"); emitted.add(ins.address)
         STAT["total"]+=1
         b=ins.bytes
         if ins.id==0 and len(b)==2 and 0xA0<=b[0]<=0xAF:
@@ -278,6 +282,10 @@ def lift_function(code, seg, start, end):
         stmts,_=emit(ins,targets)
         L.append(f"  /* {ins.address:04x} {ins.mnemonic} {ins.op_str} */")
         L+= [f"  {s}" for s in stmts]
+    # trampolines for branch targets that land outside this function (tail calls
+    # / shared handlers) -- call the containing function's address and return
+    for t in sorted(targets - emitted):
+        L.append(f" L{t:x}: m68k_call(g_seg_base+0x{t:x}u); return;")
     L.append("}")
     return name,"\n".join(L)
 

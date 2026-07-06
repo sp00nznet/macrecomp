@@ -51,7 +51,11 @@ void m68k_unimplemented(const char *what, uint32_t addr) {
     fprintf(stderr, "m68k: unimplemented '%s' at %06x\n", what, addr);
 }
 
-/* Toolbox trap HAL stub (Phase 4 replaces this with real QuickDraw/Event/etc). */
-__attribute__((weak)) void m68k_trap(uint16_t word) {
-    fprintf(stderr, "m68k_trap: $%04X (no HAL yet)\n", word);
+/* Toolbox trap HAL stub. Phase 4 links a real HAL instead of this object.
+ * Kept weak-ish via MACRECOMP_TRAP_STUB so a real HAL can override at link. */
+#ifndef MACRECOMP_NO_TRAP_STUB
+void m68k_trap(uint16_t word) {
+    static int n = 0;
+    if (n++ < 20) fprintf(stderr, "m68k_trap: $%04X (no HAL yet)\n", word);
 }
+#endif
