@@ -44,19 +44,22 @@ static void bump_ticks(void){
  * functions return via RTS and never touch it, so we discard it ourselves. */
 #define RET_SENTINEL 0xFFFFFFF0u
 
-volatile uint32_t g_last_call = 0;             /* for the watchdog: last fn entered */
+volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
+volatile uint32_t g_shadow[512]; volatile int g_shadow_sp = 0;   /* shadow call stack */
 
 void m68k_call(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
     m68k_fn fn = ft_lookup(addr);
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x\n", addr); return; }
-    g_last_call = addr;
+    if (addr != g_last_call) { g_prev_call = g_last_call; g_last_call = addr; }
     bump_ticks();
+    if (g_shadow_sp < 512) g_shadow[g_shadow_sp] = addr; g_shadow_sp++;
     SP -= 4; m68k_w32(SP, RET_SENTINEL);        /* fake return address on the 68k stack */
     uint32_t after = SP;
     fn();
     if (SP == after) SP += 4;                    /* C-style fn left it; discard */
     /* Pascal fn already popped it (and removed its args); SP is higher — leave it */
+    if (g_shadow_sp > 0) g_shadow_sp--;
 }
 
 /* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the
