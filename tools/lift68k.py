@@ -263,30 +263,88 @@ def emit(ins, targets):
     return C, term
 
 
+# Inline-table `case` dispatchers: called as `jsr <a5off>(a5)` with the selector
+# in d0, followed in the code stream by [count][off0,sel0]...; handler_i lives at
+# (address of off_i word) + off_i. We lower the whole thing to a C switch.
+DISPATCH_A5 = {0x2a}                         # Shufflepuck jt entry 1 (fn_1_0128)
+
+def dispatch_a5(ins):
+    if ins.id==0 or ins.mnemonic!="jsr": return None
+    m=re.fullmatch(r"\$([0-9a-fA-F]+)\(a5\)", ins.op_str.strip())
+    return int(m.group(1),16) if (m and int(m.group(1),16) in DISPATCH_A5) else None
+
+def read_dispatch(code, tbl):
+    if tbl+2>len(code): return None
+    count=(code[tbl]<<8)|code[tbl+1]
+    if count>128: return None
+    entries=[]
+    for i in range(count):
+        pi=tbl+2+4*i
+        if pi+4>len(code): return None
+        off=(code[pi]<<8)|code[pi+1]; sel=(code[pi+2]<<8)|code[pi+3]
+        if sel>=0x8000: sel-=0x10000
+        h=pi+off
+        if not(0<=h<len(code)): return None
+        entries.append((sel,h))
+    return entries, tbl+2+4*count
+
+def disasm_one(code, pc):
+    for i in md.disasm(code[pc:min(pc+24,len(code))], pc): return i
+    return None
+
+
 def lift_function(code, seg, start, end):
-    # pass 1: collect local branch targets (don't let it affect coverage stats)
+    # cursor pass: build a stream of ('ins',insn) / ('trapdata',addr,bytes) /
+    # ('dispatch',addr,entries,table_end), skipping inline dispatch tables.
+    stream=[]; pc=start
+    while pc<end:
+        ins=disasm_one(code,pc)
+        if ins is None or ins.address!=pc:
+            stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2; continue
+        da=dispatch_a5(ins)
+        if da is not None:
+            d=read_dispatch(code, pc+ins.size)
+            if d:
+                entries,tend=d; stream.append(("dispatch",pc,entries,tend)); pc=tend; continue
+        if ins.id==0:
+            stream.append(("trapdata",ins.address,bytes(ins.bytes)))
+        else:
+            stream.append(("ins",ins))
+        pc+=ins.size
+
+    # collect branch targets (emit side-effects) without disturbing coverage stats
     targets=set(); saved=dict(STAT)
-    for ins in md.disasm(code[start:end], start):
-        if ins.id==0: continue
-        emit(ins, targets)
+    for it in stream:
+        if it[0]=="ins": emit(it[1],targets)
+        elif it[0]=="dispatch":
+            for _,h in it[2]: targets.add(h)
     STAT.clear(); STAT.update(saved)
-    # pass 2: emit
+
     name=f"fn_{seg}_{start:04x}"; L=[f"void {name}(void){{"]; emitted=set(); last_term=True
-    for ins in md.disasm(code[start:end], start):
+    for it in stream:
+        if it[0]=="dispatch":
+            _,addr,entries,tend=it
+            L.append(f"  /* {addr:04x} case-dispatch $2a -> {len(entries)} cases */")
+            L.append("  switch((int16_t)DW(0)){")
+            for sel,h in entries: L.append(f"   case {sel}: goto L{h:x};")
+            L.append("   default: break; }")
+            last_term=False; continue
+        if it[0]=="trapdata":
+            addr,b=it[1],it[2]
+            if addr in targets: L.append(f" L{addr:x}:;"); emitted.add(addr)
+            STAT["total"]+=1
+            if len(b)>=2 and 0xA0<=b[0]<=0xAF:
+                STAT["traps"]+=1; L.append(f"  m68k_trap(0x{(b[0]<<8)|b[1]:04x});")
+            else: L.append(f"  /* data {b.hex()} */")
+            last_term=False; continue
+        ins=it[1]
         if ins.address in targets: L.append(f" L{ins.address:x}:;"); emitted.add(ins.address)
         STAT["total"]+=1
-        b=ins.bytes
-        if ins.id==0 and len(b)==2 and 0xA0<=b[0]<=0xAF:
-            STAT["traps"]+=1; L.append(f"  m68k_trap(0x{(b[0]<<8)|b[1]:04x});"); last_term=False; continue
-        if ins.id==0: L.append(f"  /* data {b.hex()} */"); last_term=False; continue
         stmts,term=emit(ins,targets); last_term=term
         L.append(f"  /* {ins.address:04x} {ins.mnemonic} {ins.op_str} */")
         L+= [f"  {s}" for s in stmts]
-    # fell off the end without a terminal -> flows into the next function
     if not last_term and end < len(code):
         L.append(f"  m68k_call(g_seg_base+0x{end:x}u); return; /* fall-through */")
-    # trampolines for branch targets that land outside this function (tail calls
-    # / shared handlers) -- call the containing function's address and return
     for t in sorted(targets - emitted):
         L.append(f" L{t:x}: m68k_call(g_seg_base+0x{t:x}u); return;")
     L.append("}")

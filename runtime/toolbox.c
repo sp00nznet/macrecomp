@@ -114,7 +114,8 @@ static void logtrap(uint16_t w){
 void m68k_trap(uint16_t raw){
     uint16_t w = norm(raw);
     if(getenv("MRTRACE")){ static long n=0; fprintf(stderr,"[%5ld] $%04X\n", n++, w); }
-    if(getenv("MRPRESENT")){ static long p=0; if(++p%300==0) plat_present(); }
+    { const char *mp=getenv("MRPRESENT"); if(mp){ int iv=atoi(mp); if(iv<=0)iv=300;
+        static long p=0; if(++p%iv==0) plat_present(); } }
     switch(w){
     /* ---- init (mostly no-ops for us) ---- */
     case 0xA86E: /*InitGraf*/ (void)pop32(); break;      /* arg: globalsPtr */
@@ -238,7 +239,8 @@ void m68k_trap(uint16_t raw){
     /* ---- DrawPicture: blit real PICT art ---- */
     case 0xA8F6: /*DrawPicture*/ { uint32_t rp=pop32(); uint32_t pich=pop32();
         uint32_t pic = pich ? m68k_r32(pich) : 0; Rect dst = rd_rect(rp);
-        if(pic) draw_pict(pic, dst); } break;
+        if(pic) draw_pict(pic, dst);
+        if(getenv("MRSHOTPICT")) plat_present(); } break;
 
     /* ---- CopyBits: blit a source BitMap (in M.mem) to the framebuffer ---- */
     case 0xA8EC: /*CopyBits*/ {
