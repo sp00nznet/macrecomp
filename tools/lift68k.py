@@ -271,17 +271,20 @@ def lift_function(code, seg, start, end):
         emit(ins, targets)
     STAT.clear(); STAT.update(saved)
     # pass 2: emit
-    name=f"fn_{seg}_{start:04x}"; L=[f"void {name}(void){{"]; emitted=set()
+    name=f"fn_{seg}_{start:04x}"; L=[f"void {name}(void){{"]; emitted=set(); last_term=True
     for ins in md.disasm(code[start:end], start):
         if ins.address in targets: L.append(f" L{ins.address:x}:;"); emitted.add(ins.address)
         STAT["total"]+=1
         b=ins.bytes
         if ins.id==0 and len(b)==2 and 0xA0<=b[0]<=0xAF:
-            STAT["traps"]+=1; L.append(f"  m68k_trap(0x{(b[0]<<8)|b[1]:04x});"); continue
-        if ins.id==0: L.append(f"  /* data {b.hex()} */"); continue
-        stmts,_=emit(ins,targets)
+            STAT["traps"]+=1; L.append(f"  m68k_trap(0x{(b[0]<<8)|b[1]:04x});"); last_term=False; continue
+        if ins.id==0: L.append(f"  /* data {b.hex()} */"); last_term=False; continue
+        stmts,term=emit(ins,targets); last_term=term
         L.append(f"  /* {ins.address:04x} {ins.mnemonic} {ins.op_str} */")
         L+= [f"  {s}" for s in stmts]
+    # fell off the end without a terminal -> flows into the next function
+    if not last_term and end < len(code):
+        L.append(f"  m68k_call(g_seg_base+0x{end:x}u); return; /* fall-through */")
     # trampolines for branch targets that land outside this function (tail calls
     # / shared handlers) -- call the containing function's address and return
     for t in sorted(targets - emitted):
@@ -301,6 +304,7 @@ def main():
     # function starts = jump-table entries for this segment + every intra-segment
     # bsr/jsr call target (local subroutines that have no jump-table entry).
     starts={e["offset"] for e in jt["entries"] if e["thunk"] and e["segment"]==a.seg}
+    branches=[]                                            # (from_addr, target) for bra/bcc/dbcc/jmp
     for ins in md.disasm(code, 0):
         if not ins.id: continue
         mn=ins.mnemonic.split(".")[0]; op=ins.op_str.strip()
@@ -312,8 +316,21 @@ def main():
         elif mn=="jmp" and pcrel:                          # tail-call jmp $x(pc)
             t=int(pcrel.group(1).replace("$","0x"),0)&0xFFFFFFFF
             if 0<=t<len(code): starts.add(t)
+        if mn in ("bra","jmp") or mn.startswith("db") or re.fullmatch(r"b(hi|ls|cc|hs|cs|lo|ne|eq|vc|vs|pl|mi|ge|lt|gt|le)",mn):
+            bm=re.search(r"\$([0-9a-fA-F]+)\s*$", op)       # trailing bare-hex branch target
+            if bm: branches.append((ins.address, int(bm.group(1),16)))
     for tok in a.entry.split(","):
         if tok.strip(): starts.add(int(tok,0))
+    # refine: any branch whose target lands in a *different* function than the
+    # branch (dual-entry / shared-tail routines) makes that target its own function
+    for _ in range(6):
+        offs=sorted(x for x in starts if x<len(code))
+        added=False
+        for fa,t in branches:
+            if not(0<=t<len(code)) or t in starts: continue
+            s=max(o for o in offs if o<=fa); e=min([o for o in offs if o>fa]+[len(code)])
+            if not(s<=t<e): starts.add(t); added=True
+        if not added: break
     offs=sorted(x for x in starts if x<len(code))
     bounds=list(zip(offs, offs[1:]+[len(code)]))
     fns=[]

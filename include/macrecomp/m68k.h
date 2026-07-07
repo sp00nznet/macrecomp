@@ -24,12 +24,15 @@ typedef struct M68K {
 extern M68K M;
 #define SP (M.a[7])
 
-/* ---- big-endian memory access ---- */
-static inline uint32_t m68k_r8 (uint32_t a){ return M.mem[a]; }
-static inline uint32_t m68k_r16(uint32_t a){ return ((uint32_t)M.mem[a]<<8)|M.mem[a+1]; }
+/* ---- big-endian memory access (bounds-checked: 24-bit space masked into
+ * M.mem; out-of-range reads yield 0 and writes are dropped, so a stray pointer
+ * degrades gracefully instead of segfaulting) ---- */
+static inline int m68k_ok(uint32_t a){ return a < M.memsize; }
+static inline uint32_t m68k_r8 (uint32_t a){ return m68k_ok(a)?M.mem[a]:0; }
+static inline uint32_t m68k_r16(uint32_t a){ return ((uint32_t)m68k_r8(a)<<8)|m68k_r8(a+1); }
 static inline uint32_t m68k_r32(uint32_t a){ return (m68k_r16(a)<<16)|m68k_r16(a+2); }
-static inline void m68k_w8 (uint32_t a,uint32_t v){ M.mem[a]=(uint8_t)v; }
-static inline void m68k_w16(uint32_t a,uint32_t v){ M.mem[a]=(uint8_t)(v>>8); M.mem[a+1]=(uint8_t)v; }
+static inline void m68k_w8 (uint32_t a,uint32_t v){ if(m68k_ok(a)) M.mem[a]=(uint8_t)v; }
+static inline void m68k_w16(uint32_t a,uint32_t v){ m68k_w8(a,v>>8); m68k_w8(a+1,v); }
 static inline void m68k_w32(uint32_t a,uint32_t v){ m68k_w16(a,v>>16); m68k_w16(a+2,v); }
 
 /* ---- sign helpers ---- */

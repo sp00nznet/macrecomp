@@ -31,10 +31,32 @@ static m68k_fn ft_lookup(uint32_t addr) {
     return 0;
 }
 
+/* low-memory Ticks (0x16A): the system bumps it 60/sec; games busy-wait on it.
+ * We advance it on every lifted call so timing loops make progress. */
+static void bump_ticks(void){
+    uint32_t t=(M.mem[0x16A]<<24)|(M.mem[0x16B]<<16)|(M.mem[0x16C]<<8)|M.mem[0x16D];
+    t++; M.mem[0x16A]=t>>24; M.mem[0x16B]=t>>16; M.mem[0x16C]=t>>8; M.mem[0x16D]=t;
+}
+
+/* A fake return address pushed by m68k_call. Pascal-convention functions return
+ * by popping the caller's return address and `jmp (aX)`-ing to it (also removing
+ * their parameters); they hit this sentinel, which unwinds back to C. C-style
+ * functions return via RTS and never touch it, so we discard it ourselves. */
+#define RET_SENTINEL 0xFFFFFFF0u
+
+volatile uint32_t g_last_call = 0;             /* for the watchdog: last fn entered */
+
 void m68k_call(uint32_t addr) {
+    if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
     m68k_fn fn = ft_lookup(addr);
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x\n", addr); return; }
+    g_last_call = addr;
+    bump_ticks();
+    SP -= 4; m68k_w32(SP, RET_SENTINEL);        /* fake return address on the 68k stack */
+    uint32_t after = SP;
     fn();
+    if (SP == after) SP += 4;                    /* C-style fn left it; discard */
+    /* Pascal fn already popped it (and removed its args); SP is higher — leave it */
 }
 
 /* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the

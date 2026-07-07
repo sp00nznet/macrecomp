@@ -262,7 +262,15 @@ void m68k_trap(uint16_t raw){
     case 0xA988: /*CautionAlert*/ { (void)pop32(); (void)pop16(); m68k_w16(SP,1); } break;
     case 0xA9F5: /*GetAppParms*/ { uint32_t ap=pop32(),rn=pop32(),nm=pop32();
         if(nm)m68k_w8(nm,0); if(rn)m68k_w16(rn,0); if(ap)m68k_w32(ap,0); } break;
-    case 0xA000: /*Open*/ case 0xA002: /*Read*/ case 0xA003: /*Write*/ case 0xA001: /*Close*/
+    case 0xA000: /*Open*/ case 0xA00A: /*OpenRF*/ { uint32_t pb=M.a[0], np=m68k_r32(pb+18);
+        if(getenv("MRFILE")){ char nm[64]={0}; int len=np?m68k_r8(np):0;
+            for(int i=0;i<len&&i<63;i++) nm[i]=(char)m68k_r8(np+1+i);
+            fprintf(stderr,"[File] Open%s '%s'\n", w==0xA00A?"RF":"", nm); }
+        M.d[0]=(uint32_t)(-43); m68k_w16(pb+16,(uint16_t)(-43)); } break; /* fnfErr: no such file */
+    case 0xA002: /*Read*/ { uint32_t pb=M.a[0]; uint32_t req=m68k_r32(pb+36);
+        if(getenv("MRFILE")) fprintf(stderr,"[File] Read req=%u buf=%x\n",req,m68k_r32(pb+32));
+        m68k_w32(pb+40, 0);                  /* ioActCount = 0 */ M.d[0]=-39; } break; /* eofErr */
+    case 0xA003: /*Write*/ case 0xA001: /*Close*/
     case 0xA044: /*SetFPos*/ case 0xA018: /*GetFPos*/ case 0xA013: /*FlushVol*/
     case 0xA008: /*Create*/ case 0xA009: /*Delete*/ case 0xA00C: /*GetFileInfo*/
         M.d[0]=0; break;                     /* register-based File Mgr: pretend OK */
