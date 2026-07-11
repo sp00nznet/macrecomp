@@ -40,6 +40,9 @@ void qd_draw_text(const uint8_t *p, int len);
 void qd_copybits(const uint8_t *src, int src_rowbytes, int sw, int sh,
                  const Rect *srcR, const Rect *dstR, int mode);
 void qd_set_clip(const Rect *r);
+/* set the current drawing target: the screen (is_screen=1) or a 1-bit BitMap in
+ * guest memory (base/rowbytes and the bitmap bounds' left/top origin) */
+void qd_set_port(int is_screen, uint32_t base, int rowbytes, int bl, int bt);
 
 /* rect utilities */
 void rect_set(Rect *r, int l, int t, int rt, int b);

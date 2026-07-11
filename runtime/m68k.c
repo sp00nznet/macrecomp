@@ -42,7 +42,7 @@ static void bump_ticks(void){
  * by popping the caller's return address and `jmp (aX)`-ing to it (also removing
  * their parameters); they hit this sentinel, which unwinds back to C. C-style
  * functions return via RTS and never touch it, so we discard it ourselves. */
-#define RET_SENTINEL 0xFFFFFFF0u
+#define RET_SENTINEL 0xCAFE0000u
 
 volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
 volatile uint32_t g_shadow[512]; volatile int g_shadow_sp = 0;   /* shadow call stack */
@@ -62,6 +62,23 @@ void m68k_call(uint32_t addr) {
     if (g_shadow_sp > 0) g_shadow_sp--;
 }
 
+/* rts: the only "return address" this recomp ever pushes is RET_SENTINEL (m68k_call).
+ * A compiler return-tail that saved and re-pushed it (movea.l (a7)+,aX; ...; move.l
+ * aX,-(a7); rts) leaves the sentinel on top -> pop it so the caller's stack balances.
+ * Anything else on top is a stack imbalance we can't follow: leave it and just
+ * return to the C caller (m68k_call unwinds), matching the pre-sentinel behavior. */
+void m68k_rts(void) { if (m68k_r32(SP) == RET_SENTINEL) SP += 4; }
+
+/* A tail transfer (68k `jmp`): run the target with NO return address pushed, so
+ * its eventual rts returns to *our* caller, not to us. This is how the compiler's
+ * shared return tails (movea.l (a7)+,aX; ...; rts) and fall-throughs work. */
+void m68k_jump(uint32_t addr) {
+    if (addr == RET_SENTINEL) return;          /* rts'd to the fake return -> unwind */
+    m68k_fn fn = ft_lookup(addr);
+    if (!fn) { fprintf(stderr, "m68k_jump: no function at %06x\n", addr); return; }
+    fn();
+}
+
 /* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the
  * decrypted jump table (a5 offset -> target code address). Stub until Phase 5. */
 static uint32_t jt_map[8192];
@@ -70,6 +87,11 @@ void m68k_jt_call(uint32_t a5off) {
     uint32_t addr = (a5off < sizeof(jt_map)*2) ? jt_map[a5off/2] : 0;
     if (addr) m68k_call(addr);
     else fprintf(stderr, "m68k_jt_call: unmapped A5+%x\n", a5off);
+}
+void m68k_jt_jump(uint32_t a5off) {   /* tail jmp through the jump table */
+    uint32_t addr = (a5off < sizeof(jt_map)*2) ? jt_map[a5off/2] : 0;
+    if (addr) m68k_jump(addr);
+    else fprintf(stderr, "m68k_jt_jump: unmapped A5+%x\n", a5off);
 }
 
 void m68k_unimplemented(const char *what, uint32_t addr) {

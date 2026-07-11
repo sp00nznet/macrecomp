@@ -21,6 +21,18 @@ static Rect rd_rect(uint32_t p){ Rect r; r.top=(int16_t)m68k_r16(p); r.left=(int
 static void wr_rect(uint32_t p,const Rect*r){ m68k_w16(p,r->top); m68k_w16(p+2,r->left);
     m68k_w16(p+4,r->bottom); m68k_w16(p+6,r->right); }
 
+/* baseAddr value that marks "the screen" (qd_fb) vs an offscreen buffer in M.mem */
+#define SCREEN_TAG 0x00000001u
+static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
+/* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
+static void bitmap_screen(uint32_t bm){ m68k_w32(bm,SCREEN_TAG); m68k_w16(bm+4,QD_W/8);
+    Rect s={0,0,QD_H,QD_W}; wr_rect(bm+6,&s); }
+static void set_target_from_bitmap(uint32_t bm){
+    uint32_t base=m68k_r32(bm); int rb=(int)(m68k_r16(bm+4)&0x3FFF);
+    int bt=(int16_t)m68k_r16(bm+6), bl=(int16_t)m68k_r16(bm+8);
+    qd_set_port(base==SCREEN_TAG || base==0, base, rb, bl, bt);
+}
+
 /* ---- bump heap inside M.mem (NewPtr/NewHandle) ---- */
 static uint32_t heap_ptr = 0, heap_end = 0;
 static void heap_init(void){ heap_ptr = 0x00800000; heap_end = 0x01E00000; }  /* 8..30 MB */
@@ -127,8 +139,8 @@ void m68k_trap(uint16_t raw){
     case 0xA9F4: /*ExitToShell*/ fprintf(stderr,"[ExitToShell]\n"); plat_present(); exit(0);
 
     /* ---- QuickDraw: pen & text state ---- */
-    case 0xA873: /*SetPort*/ (void)pop32(); break;
-    case 0xA874: /*GetPort*/ { uint32_t pp=pop32(); if(pp) m68k_w32(pp,0); } break;
+    case 0xA873: /*SetPort*/ { uint32_t p=pop32(); g_cur_port=p; if(p) set_target_from_bitmap(p+2); } break;
+    case 0xA874: /*GetPort*/ { uint32_t pp=pop32(); if(pp) m68k_w32(pp,g_cur_port); } break;
     case 0xA89E: /*PenNormal*/ qd_pen_size(1,1); qd_pen_mode(0); qd_pen_pat_black(1); break;
     case 0xA89B: /*PenSize*/ { int16_t h=pop16(),ww=pop16(); qd_pen_size(ww,h); } break;
     case 0xA89C: /*PenMode*/ qd_pen_mode(pop16()); break;
@@ -191,8 +203,10 @@ void m68k_trap(uint16_t raw){
     /* ---- cursor / port (mostly no-ops; QuickDraw draws to one framebuffer) ---- */
     case 0xA852: /*HideCursor*/ case 0xA853: /*ShowCursor*/ case 0xA856: /*ObscureCursor*/
     case 0xA9B4: /*SystemTask*/ break;
-    case 0xA86F: /*OpenPort*/ { uint32_t p=pop32(); if(p){ Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s);} } break;
-    case 0xA875: /*SetPortBits*/ (void)pop32(); break;
+    case 0xA86F: /*OpenPort*/ { uint32_t p=pop32(); if(p){ bitmap_screen(p+2);
+        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,SCREEN_TAG,QD_W/8,0,0);} } break;
+    case 0xA875: /*SetPortBits*/ { uint32_t bm=pop32(); if(bm) set_target_from_bitmap(bm);
+        if(getenv("MRGFX")&&bm) fprintf(stderr,"[gfx] SetPortBits base=%x rb=%d\n",m68k_r32(bm),m68k_r16(bm+4)&0x3fff); } break;
     case 0xA9B8: /*GetPattern*/ { (void)pop16(); uint32_t h=heap_alloc(4),p=heap_alloc(8);
         for(int i=0;i<8;i++) M.mem[p+i]=0xFF; if(h)m68k_w32(h,p); push32(h); } break;
 
@@ -204,6 +218,7 @@ void m68k_trap(uint16_t raw){
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect br = bounds?rd_rect(bounds):(Rect){0,0,QD_H,QD_W};
         Rect pr; rect_set(&pr,0,0,br.bottom-br.top,br.right-br.left);
+        bitmap_screen(w+2);                 /* GrafPort.portBits -> the screen */
         wr_rect(w+16, &pr);                 /* GrafPort.portRect */
         m68k_w32(w+0xFC, refcon);           /* WindowRecord.refCon (approx offset) */
         m68k_w32(SP, w);                    /* Pascal result slot */
@@ -211,7 +226,7 @@ void m68k_trap(uint16_t raw){
     case 0xA9BD: /*GetNewWindow*/ {
         uint32_t behind=pop32(); (void)behind; uint32_t wstor=pop32(); (void)pop16();
         uint32_t w = wstor ? wstor : heap_alloc(256);
-        Rect pr; rect_set(&pr,0,0,QD_H,QD_W); wr_rect(w+16,&pr);
+        Rect pr; rect_set(&pr,0,0,QD_H,QD_W); bitmap_screen(w+2); wr_rect(w+16,&pr);
         m68k_w32(SP, w);
     } break;
     case 0xA914: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
@@ -242,21 +257,32 @@ void m68k_trap(uint16_t raw){
         if(pic) draw_pict(pic, dst);
         if(getenv("MRSHOTPICT")) plat_present(); } break;
 
-    /* ---- CopyBits: blit a source BitMap (in M.mem) to the framebuffer ---- */
+    /* ---- CopyBits: blit between any src/dst (screen <-> guest-memory bitmap) ---- */
     case 0xA8EC: /*CopyBits*/ {
-        (void)pop32();                       /* maskRgn */ (void)pop16(); /* mode */
-        uint32_t drp=pop32(), srp=pop32(); (void)pop32(); /* dstBits */ uint32_t src=pop32();
-        uint32_t base=m68k_r32(src); int rb=m68k_r16(src+4)&0x3FFF;
-        int bt=(int16_t)m68k_r16(src+6), bl=(int16_t)m68k_r16(src+8);
+        (void)pop32();                       /* maskRgn */
+        int16_t mode=pop16();
+        uint32_t drp=pop32(), srp=pop32(), dstB=pop32(), srcB=pop32();
+        uint32_t sbase=m68k_r32(srcB); int srb=m68k_r16(srcB+4)&0x3FFF;
+        int sbt=(int16_t)m68k_r16(srcB+6), sbl=(int16_t)m68k_r16(srcB+8);
+        uint32_t dbase=m68k_r32(dstB); int drb=m68k_r16(dstB+4)&0x3FFF;
+        int dbt=(int16_t)m68k_r16(dstB+6), dbl=(int16_t)m68k_r16(dstB+8);
         Rect s=rd_rect(srp), d=rd_rect(drp);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] CopyBits src=%x dst=%x sR=%d,%d,%d,%d dR=%d,%d,%d,%d\n",
+            sbase,dbase,s.top,s.left,s.bottom,s.right,d.top,d.left,d.bottom,d.right);
         int sw=s.right-s.left, sh=s.bottom-s.top, dw=d.right-d.left, dh=d.bottom-d.top;
-        if(sw>0&&sh>0&&dw>0&&dh>0&&rb>0&&base&&base<M.memsize){
-            for(int y=0;y<dh;y++){ int sy=s.top-bt + y*sh/dh;
-                for(int x=0;x<dw;x++){ int sx=s.left-bl + x*sw/dw;
-                    uint32_t a=base+(uint32_t)sy*rb+(sx>>3);
-                    int bit = a<M.memsize ? (m68k_r8(a)>>(7-(sx&7)))&1 : 0;
-                    int px=d.left+x, py=d.top+y;
-                    if(px>=0&&px<QD_W&&py>=0&&py<QD_H) qd_fb[py][px]=bit; } }
+        int src_screen=(sbase==SCREEN_TAG||sbase==0), dst_screen=(dbase==SCREEN_TAG||dbase==0);
+        int inv=((mode&0x24)==0x24);         /* notSrcCopy: invert */
+        if(sw>0&&sh>0&&dw>0&&dh>0){
+            for(int y=0;y<dh;y++){ int sy=(s.top-sbt)+y*sh/dh;
+                for(int x=0;x<dw;x++){ int sx=(s.left-sbl)+x*sw/dw; int bit=0;
+                    if(src_screen){ int gx=sx+sbl,gy=sy+sbt; bit=(gx>=0&&gx<QD_W&&gy>=0&&gy<QD_H)?qd_fb[gy][gx]:0; }
+                    else if(srb>0){ uint32_t a=sbase+(uint32_t)sy*srb+(sx>>3); bit=a<M.memsize?(m68k_r8(a)>>(7-(sx&7)))&1:0; }
+                    if(inv) bit=!bit;
+                    int dpx=d.left+x, dpy=d.top+y;
+                    if(dst_screen){ if(dpx>=0&&dpx<QD_W&&dpy>=0&&dpy<QD_H) qd_fb[dpy][dpx]=(uint8_t)bit; }
+                    else if(drb>0){ int dlx=dpx-dbl,dly=dpy-dbt; if(dlx>=0&&dly>=0){ uint32_t a=dbase+(uint32_t)dly*drb+(dlx>>3);
+                        if(a<M.memsize){ uint8_t bb=m68k_r8(a),mk=0x80u>>(dlx&7); m68k_w8(a,bit?(bb|mk):(bb&(uint8_t)~mk)); } } }
+                } }
         } } break;
 
     /* ---- Dialogs / misc ---- */

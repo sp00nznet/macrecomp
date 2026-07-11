@@ -3,6 +3,7 @@
  * text, and CopyBits. 0 = white, 1 = black (we keep 1 byte/pixel for clarity;
  * the SDL layer packs to RGBA). */
 #include "macrecomp/toolbox.h"
+#include "macrecomp/m68k.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -13,12 +14,38 @@ static int pen_black = 1;          /* current pen pattern: 1 black, 0 white */
 static int pen_mode = 0;           /* 0 = patCopy (srcCopy-ish) */
 static Rect clip = { 0, 0, QD_H, QD_W };
 
+/* current drawing target: the screen (qd_fb) or a 1-bit BitMap in guest memory.
+ * The game double-buffers -- SetPortBits to an offscreen buffer, draw, then
+ * CopyBits it to the screen. */
+static struct { int is_screen; uint32_t base; int rowbytes, bl, bt; }
+    cur = { 1, 0, 0, 0, 0 };
+void qd_set_port(int is_screen, uint32_t base, int rowbytes, int bl, int bt){
+    cur.is_screen=is_screen; cur.base=base; cur.rowbytes=rowbytes; cur.bl=bl; cur.bt=bt;
+}
+
 static int clamp(int x, int lo, int hi){ return x<lo?lo:x>hi?hi:x; }
 
 static void put(int h, int v, int black){
     if (h < clip.left || h >= clip.right || v < clip.top || v >= clip.bottom) return;
-    if (h < 0 || h >= QD_W || v < 0 || v >= QD_H) return;
-    qd_fb[v][h] = (uint8_t)black;
+    if (cur.is_screen){
+        if (h < 0 || h >= QD_W || v < 0 || v >= QD_H) return;
+        qd_fb[v][h] = (uint8_t)black;
+    } else {                          /* packed 1-bit bitmap in M.mem (1 = black) */
+        int lx = h - cur.bl, ly = v - cur.bt;
+        if (lx < 0 || ly < 0 || cur.rowbytes <= 0) return;
+        uint32_t a = cur.base + (uint32_t)ly * cur.rowbytes + (lx >> 3);
+        uint8_t byte = (uint8_t)m68k_r8(a), mask = 0x80u >> (lx & 7);
+        m68k_w8(a, black ? (byte | mask) : (byte & (uint8_t)~mask));
+    }
+}
+static int getpix(int h, int v){
+    if (cur.is_screen){
+        if (h < 0 || h >= QD_W || v < 0 || v >= QD_H) return 0;
+        return qd_fb[v][h];
+    }
+    int lx = h - cur.bl, ly = v - cur.bt;
+    if (lx < 0 || ly < 0 || cur.rowbytes <= 0) return 0;
+    return (m68k_r8(cur.base + (uint32_t)ly*cur.rowbytes + (lx>>3)) >> (7-(lx&7))) & 1;
 }
 
 void qd_init(void){ memset(qd_fb, 0, sizeof qd_fb); pen_h=pen_v=0; pen_w=pen_h_sz=1;
@@ -52,9 +79,7 @@ void qd_fill_rect(const Rect *r, int black){
 void qd_paint_rect(const Rect *r){ qd_fill_rect(r, pen_black); }
 void qd_erase_rect(const Rect *r){ qd_fill_rect(r, 0); }
 void qd_invert_rect(const Rect *r){
-    for(int y=r->top;y<r->bottom;y++) for(int x=r->left;x<r->right;x++)
-        if(x>=clip.left&&x<clip.right&&y>=clip.top&&y<clip.bottom&&x>=0&&x<QD_W&&y>=0&&y<QD_H)
-            qd_fb[y][x]^=1;
+    for(int y=r->top;y<r->bottom;y++) for(int x=r->left;x<r->right;x++) put(x,y,!getpix(x,y));
 }
 void qd_frame_rect(const Rect *r){
     hspan(r->left,r->right-1,r->top,pen_black); hspan(r->left,r->right-1,r->bottom-1,pen_black);

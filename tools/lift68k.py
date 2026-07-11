@@ -124,6 +124,20 @@ def indirect_call(tok):
     return None
 
 
+def indirect_jump(tok):
+    """A jmp is a tail transfer (goto/tail-call), NOT a subroutine call: it must
+    not push a return address. Mirror indirect_call but with m68k_jump."""
+    t=tok.strip()
+    if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(a5\)",t)):
+        return f"m68k_jt_jump(0x{int(m.group(1).replace('$','0x'),0)&0xffff:x}u);"
+    if (m:=re.fullmatch(r"\(a(\d)\)",t)): return f"m68k_jump(M.a[{m.group(1)}]);"
+    if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(a(\d)\)",t)):
+        d=int(m.group(1).replace("$","0x"),0); n=int(m.group(2)); return f"m68k_jump(M.a[{n}]+{d});"
+    if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc\)",t)):
+        return f"m68k_jump(g_seg_base+0x{int(m.group(1).replace('$','0x'),0)&0xffffffff:x}u);"
+    return None
+
+
 def emit(ins, targets):
     mn=ins.mnemonic; base=mn.split(".")[0]; sz=size_of(mn); ops=ops_of(ins)
     C=[]; term=False
@@ -248,8 +262,8 @@ def emit(ins, targets):
     elif base=="jmp":
         t=btarget(ops[0])
         if t is not None: C.append(f"goto L{t:x};"); term=True; targets.add(t)
-        else: C.append(indirect_call(ops[0]) or unimpl(ins)); C.append("return;"); term=True
-    elif base=="rts": C.append("return;"); term=True
+        else: C.append(indirect_jump(ops[0]) or unimpl(ins)); C.append("return;"); term=True
+    elif base=="rts": C.append("m68k_rts(); return;"); term=True
     elif base=="nop": C.append(";")
     elif base=="bra": t=btarget(ops[0]); C.append(f"goto L{t:x};"); term=True; targets.add(t)
     elif re.fullmatch(r"b(hi|ls|cc|hs|cs|lo|ne|eq|vc|vs|pl|mi|ge|lt|gt|le)",base):
@@ -263,30 +277,55 @@ def emit(ins, targets):
     return C, term
 
 
-# Inline-table `case` dispatchers: called as `jsr <a5off>(a5)` with the selector
-# in d0, followed in the code stream by [count][off0,sel0]...; handler_i lives at
-# (address of off_i word) + off_i. We lower the whole thing to a C switch.
-DISPATCH_A5 = {0x2a}                         # Shufflepuck jt entry 1 (fn_1_0128)
+# Inline-table `case` dispatchers (THINK C switch helpers): `jsr <a5off>(a5)` with
+# the selector in d0, followed in the code stream by an inline table. The handler
+# for a case is at (address of its offset word) + offset. Three codegens:
+#   word  ($2a): [count] then count*(off:2, sel:2)     selector = (int16)d0
+#   long  ($32): [count] then count*(off:2, sel:4)     selector = (int32)d0
+#   dense ($3a): [low:2][high:2][default_off:2] then (high-low+1)*(off:2), indexed
+# We lower each to a C switch. (These a5 offsets are Shufflepuck's seg-1 jt entries.)
+DISPATCH_A5 = {0x2a:"word", 0x32:"long", 0x3a:"dense"}
 
-def dispatch_a5(ins):
+def dispatch_kind(ins):
     if ins.id==0 or ins.mnemonic!="jsr": return None
     m=re.fullmatch(r"\$([0-9a-fA-F]+)\(a5\)", ins.op_str.strip())
-    return int(m.group(1),16) if (m and int(m.group(1),16) in DISPATCH_A5) else None
+    return DISPATCH_A5.get(int(m.group(1),16)) if m else None
 
-def read_dispatch(code, tbl):
-    if tbl+2>len(code): return None
-    count=(code[tbl]<<8)|code[tbl+1]
-    if count>128: return None
-    entries=[]
-    for i in range(count):
-        pi=tbl+2+4*i
-        if pi+4>len(code): return None
-        off=(code[pi]<<8)|code[pi+1]; sel=(code[pi+2]<<8)|code[pi+3]
-        if sel>=0x8000: sel-=0x10000
-        h=pi+off
-        if not(0<=h<len(code)): return None
-        entries.append((sel,h))
-    return entries, tbl+2+4*count
+def _s(v,bits): return v-(1<<bits) if v>=(1<<(bits-1)) else v
+
+def read_dispatch(code, tbl, kind):
+    """-> (entries[(sel,handler)], table_end, default_handler_or_None) or None."""
+    if kind in ("word","long"):
+        if tbl+2>len(code): return None
+        count=(code[tbl]<<8)|code[tbl+1]
+        if count>256: return None
+        esz = 4 if kind=="word" else 6
+        entries=[]
+        for i in range(count):
+            pi=tbl+2+esz*i
+            if pi+esz>len(code): return None
+            off=(code[pi]<<8)|code[pi+1]
+            if kind=="word": sel=_s((code[pi+2]<<8)|code[pi+3],16)
+            else: sel=_s((code[pi+2]<<24)|(code[pi+3]<<16)|(code[pi+4]<<8)|code[pi+5],32)
+            h=pi+off
+            if not(0<=h<len(code)): return None
+            entries.append((sel,h))
+        return entries, tbl+2+esz*count, None
+    else:  # dense
+        if tbl+6>len(code): return None
+        low=_s((code[tbl]<<8)|code[tbl+1],16); high=_s((code[tbl+2]<<8)|code[tbl+3],16)
+        n=high-low+1
+        if n<1 or n>2048: return None
+        doff=(code[tbl+4]<<8)|code[tbl+5]; default_h=(tbl+4)+doff
+        if not(0<=default_h<len(code)): return None
+        entries=[]
+        for k in range(n):
+            pi=tbl+6+2*k
+            if pi+2>len(code): return None
+            off=(code[pi]<<8)|code[pi+1]; h=pi+off
+            if not(0<=h<len(code)): return None
+            entries.append((low+k,h))
+        return entries, tbl+6+2*n, default_h
 
 def disasm_one(code, pc):
     for i in md.disasm(code[pc:min(pc+24,len(code))], pc): return i
@@ -301,11 +340,12 @@ def lift_function(code, seg, start, end):
         ins=disasm_one(code,pc)
         if ins is None or ins.address!=pc:
             stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2; continue
-        da=dispatch_a5(ins)
+        da=dispatch_kind(ins)
         if da is not None:
-            d=read_dispatch(code, pc+ins.size)
+            d=read_dispatch(code, pc+ins.size, da)
             if d:
-                entries,tend=d; stream.append(("dispatch",pc,entries,tend)); pc=tend; continue
+                entries,tend,defh=d
+                stream.append(("dispatch",pc,entries,tend,defh,da)); pc=tend; continue
         if ins.id==0:
             stream.append(("trapdata",ins.address,bytes(ins.bytes)))
         else:
@@ -318,16 +358,18 @@ def lift_function(code, seg, start, end):
         if it[0]=="ins": emit(it[1],targets)
         elif it[0]=="dispatch":
             for _,h in it[2]: targets.add(h)
+            if it[4] is not None: targets.add(it[4])
     STAT.clear(); STAT.update(saved)
 
     name=f"fn_{seg}_{start:04x}"; L=[f"void {name}(void){{"]; emitted=set(); last_term=True
     for it in stream:
         if it[0]=="dispatch":
-            _,addr,entries,tend=it
-            L.append(f"  /* {addr:04x} case-dispatch $2a -> {len(entries)} cases */")
-            L.append("  switch((int16_t)DW(0)){")
+            _,addr,entries,tend,defh,kind=it
+            selexpr = "(int32_t)DL(0)" if kind=="long" else "(int16_t)DW(0)"
+            L.append(f"  /* {addr:04x} case-dispatch ({kind}) -> {len(entries)} cases */")
+            L.append(f"  switch({selexpr}){{")
             for sel,h in entries: L.append(f"   case {sel}: goto L{h:x};")
-            L.append("   default: break; }")
+            L.append(f"   default: goto L{defh:x}; }}" if defh is not None else "   default: break; }")
             last_term=False; continue
         if it[0]=="trapdata":
             addr,b=it[1],it[2]
@@ -344,9 +386,9 @@ def lift_function(code, seg, start, end):
         L.append(f"  /* {ins.address:04x} {ins.mnemonic} {ins.op_str} */")
         L+= [f"  {s}" for s in stmts]
     if not last_term and end < len(code):
-        L.append(f"  m68k_call(g_seg_base+0x{end:x}u); return; /* fall-through */")
+        L.append(f"  m68k_jump(g_seg_base+0x{end:x}u); return; /* fall-through */")
     for t in sorted(targets - emitted):
-        L.append(f" L{t:x}: m68k_call(g_seg_base+0x{t:x}u); return;")
+        L.append(f" L{t:x}: m68k_jump(g_seg_base+0x{t:x}u); return;")
     L.append("}")
     return name,"\n".join(L)
 

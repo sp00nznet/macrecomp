@@ -100,7 +100,10 @@ void m68k_trap(uint16_t word);     /* word = the full A-line opcode ($Axxx) */
 typedef void (*m68k_fn)(void);
 void m68k_register(uint32_t addr, m68k_fn fn);
 void m68k_call(uint32_t addr);     /* resolve + invoke (jsr/bsr to a known target) */
+void m68k_jump(uint32_t addr);     /* tail transfer (jmp): no return address pushed */
+void m68k_rts(void);               /* rts: pop the sentinel return address if present */
 void m68k_jt_call(uint32_t a5off); /* call through the A5 jump table (jsr d(a5)) */
+void m68k_jt_jump(uint32_t a5off); /* tail jmp through the A5 jump table */
 void m68k_jt_set(uint32_t a5off, uint32_t addr); /* loader wires a5 offset -> code addr */
 
 /* trap raised by the lifter for an instruction it could not translate */
