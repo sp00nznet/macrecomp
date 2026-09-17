@@ -6,13 +6,14 @@ application, and writes:
   <out>/code/CODE_<id>.bin   each 68k CODE segment (what the lifter consumes)
   <out>/rsrc/<TYPE>_<id>.bin every other resource (assets), verbatim
   <out>/inventory.json       full resource map (type, id, name, size, offsets)
+  <out>/jumptable.json       the A5 jump table: one entry per exported routine
 
 Pure Python: only depends on `machfs` and `macresources` (pip install both).
 No Apple ROM/System code is touched — just the app's own resource fork.
 """
 import argparse, json, struct, sys
 from pathlib import Path
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from machfs import Volume
 import macresources
@@ -29,6 +30,26 @@ def load_hfs(raw: bytes) -> bytes:
         if data_size in (409600, 819200, 1474560) and len(raw) >= DC42_HEADER + data_size:
             return raw[DC42_HEADER:DC42_HEADER + data_size]
     return raw
+
+
+def parse_jump_table(code0: bytes):
+    """CODE 0 is the A5 world header + jump table; return the lifter's entry list.
+
+    Header: aboveA5(4), belowA5(4), jtLen(4), jtOffset(4). Then 8-byte entries:
+    routine offset(2), then either the unloaded thunk `MOVE.W #seg,-(SP)` /
+    `_LoadSeg` ($3F3C, seg, $A9F0), or an already-loaded JMP. Only thunks name a
+    routine the lifter can turn into a function.
+
+    unprotect.py emits the same shape for protected titles, after decrypting."""
+    if len(code0) < 16:
+        return None
+    jt_len, jt_off = struct.unpack(">II", code0[8:16])
+    body, entries = code0[16:], []
+    for i in range(0, min(jt_len, len(body)) - 7, 8):
+        off, push, seg, trap = struct.unpack(">HHHH", body[i:i + 8])
+        entries.append({"idx": i // 8, "offset": off, "segment": seg,
+                        "thunk": push == 0x3F3C and trap == 0xA9F0})
+    return {"jt_offset": jt_off, "jt_len": jt_len, "entries": entries}
 
 
 def find_app(vol, want=None):
@@ -76,12 +97,14 @@ def main():
     if app.data:
         (out / "data_fork.bin").write_bytes(app.data)
 
-    inv, by = [], defaultdict(int)
+    inv, by, code0 = [], defaultdict(int), None
     for r in macresources.parse_file(app.rsrc):
         t = bytes(r.type); tname = t.decode("mac_roman", "replace")
         data = bytes(r.data); by[tname] += len(data)
         nm = r.name.decode("mac_roman", "replace") if isinstance(r.name, (bytes, bytearray)) else (r.name or "")
         safe = tname.strip().replace("/", "_") or "____"
+        if t == b"CODE" and r.id == 0:
+            code0 = data
         sub = "code" if t == b"CODE" else "rsrc"
         stem = f"CODE_{r.id}" if t == b"CODE" else f"{safe}_{r.id}"
         (out / sub / f"{stem}.bin").write_bytes(data)
@@ -92,6 +115,20 @@ def main():
         {"volume": vol.name, "app": path, "type": app.type.decode("mac_roman"),
          "creator": app.creator.decode("mac_roman"),
          "data_fork": len(app.data or b""), "resources": inv}, indent=2))
+
+    jt = parse_jump_table(code0) if code0 else None
+    if jt:
+        thunks = [e for e in jt["entries"] if e["thunk"]]
+        dist = Counter(e["segment"] for e in thunks)
+        (out / "jumptable.json").write_text(json.dumps(
+            {"n_entries": len(jt["entries"]), "n_functions": len(thunks),
+             "jt_offset": jt["jt_offset"], "jt_len": jt["jt_len"],
+             "per_segment": {str(k): v for k, v in sorted(dist.items())},
+             "entries": jt["entries"]}, indent=2))
+        print(f"jump table: {len(thunks)} functions over {len(dist)} segments "
+              f"-> {out}/jumptable.json")
+    elif code0 is None:
+        print("no CODE 0: this resource fork has no jump table")
 
     print(f"\n{len(inv)} resources -> {out}/  (by size:)")
     for tname in sorted(by, key=lambda k: -by[k]):

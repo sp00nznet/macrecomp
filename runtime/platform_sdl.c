@@ -4,6 +4,7 @@
 #include "macrecomp/toolbox.h"
 #include <SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static SDL_Window   *win;
 static SDL_Renderer *ren;
@@ -33,7 +34,21 @@ int plat_open(const char *title, int scale){
     return (ren&&tex)?0:1;
 }
 
+/* MRSHOT=<path> writes the framebuffer to a PGM on every present (overwriting),
+ * so a run can be inspected without a display -- useful for CI and for capturing
+ * a frame from a title that is sitting in a modal loop. */
+static void shot(void){
+    const char *path = getenv("MRSHOT");
+    if(!path) return;
+    FILE *f = fopen(path, "wb");
+    if(!f) return;
+    fprintf(f, "P5\n%d %d\n255\n", QD_W, QD_H);
+    for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) fputc(qd_fb[y][x] ? 0 : 255, f);
+    fclose(f);
+}
+
 void plat_present(void){
+    shot();
     if(!tex) return;
     uint32_t *px; int pitch;
     SDL_LockTexture(tex, NULL, (void**)&px, &pitch);

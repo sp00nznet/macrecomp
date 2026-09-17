@@ -56,10 +56,174 @@ def scan_segment(data):
             insns += 1
     return traps, insns
 
+# --- coverage: the Toolbox surface a title needs vs. what the HAL implements ---
+
+# Which manager owns a trap. Inside Macintosh groups traps by manager but
+# traps.json is only word->name, so the grouping lives here.
+#
+# Each entry is (manager, "exact names", "Substrings"). Exact names win over
+# every substring; substrings are then tried in table order, first match wins.
+# Order therefore matters: "Ptr" (Memory) must be tried before "Pt"
+# (QuickDraw), and "Menu" before "Res" so AppendResMenu lands in Menu Mgr.
+# Traps this table cannot place are reported as unclassified rather than
+# quietly bucketed -- most of those are data bytes misread as A-line opcodes.
+MANAGERS = [
+    ("SANE (float)", "DECSTR68K SetFractEnable", "FP68K Elems68K Frac Fix X2 2X"),
+    ("Trap Mgr",     "", "TrapAddress"),
+    ("Script Mgr",   "ScriptUtil KeyScript Font2Script", ""),
+    ("TextEdit",     "", "TE"),
+    ("Dialog Mgr",   "InitDialogs ParamText ErrorSound", "Dialog Alert"),
+    ("Control Mgr",  "", "Control Ctl"),
+    ("Menu Mgr",     "SysEdit SetItem GetItem CheckItem CountMItems EnableItem "
+                     "DisableItem SetItemMark GetItemMark SetItemIcon SetItemStyle",
+                     "Menu"),
+    ("Window Mgr",   "VisRegionChanged CalcVis CalcVBehind PaintOne PaintBehind "
+                     "BringToFront SendBehind FrontWindow",
+                     "Window WMgr UpDate Update GoAway GrowIcon WTitle WRefCon"),
+    ("Segment Ldr",  "", "LoadSeg"),
+    ("Sound Mgr",    "SysBeep SetSoundVol GetSoundVol StartSound StopSound SoundDone",
+                     "Snd SoundDispatch"),
+    ("Desk Mgr",     "OpenDeskAcc CloseDeskAcc SystemClick SystemEdit SystemTask", ""),
+    ("Print Mgr",    "PrGlue", ""),
+    ("Resource Mgr", "OpenRF OpenRFPerm AddReference UniqueID Unique1ID CreateResFile",
+                     "Res"),
+    ("File Mgr",     "HFSDispatch FSDispatch Eject Allocate SFGetFile SFPutFile "
+                     "SFPGetFile SFPPutFile GetFName Open Close Read Write Create "
+                     "Delete Rename GetEOF SetEOF GetFPos SetFPos FlushFile",
+                     "PB Vol File FInfo HGet HSet HOpen HCreate HDelete HRename"),
+    ("Memory Mgr",   "BlockMove MoveHHi MaxMem FreeMem CompactMem PurgeMem PurgeSpace "
+                     "StackSpace MoreMasters MaxApplZone SetApplLimit ResrvMem "
+                     "EmptyHandle ReallocHandle RecoverHandle HeapDispatch "
+                     "HLock HUnlock HPurge HNoPurge NewString SetString GetString",
+                     "Ptr Handle Zone HandToHand"),
+    ("Event Mgr",    "GetNextEvent WaitNextEvent EventAvail PostEvent FlushEvents "
+                     "GetMouse Button StillDown WaitMouseUp TickCount GetKeys "
+                     "KeyTranslate GetCaretTime GetDblTime", ""),
+    ("Scrap Mgr",    "", "Scrap"),
+    ("Font Mgr",     "InitFonts RealFont FMSwapFont SetFScaleDisable", "Font FNum"),
+    ("Package Mgr",  "UnpackBits PackBits", "Pack"),
+    ("List Mgr",     "LNew LDispose LAddRow LDelRow LAddColumn LDelColumn LSetCell "
+                     "LGetCell LClick LUpdate LActivate LDraw LSetSelect LGetSelect "
+                     "LScroll LSize LFind LRect LNextCell LAutoScroll", ""),
+    ("Device Mgr",   "", "Device"),
+    ("QuickDraw",    "InitGraf InitPort OpenPort ClosePort SetOrigin ClipRect BackPat "
+                     "ForeColor BackColor GlobalToLocal LocalToGlobal SpaceExtra "
+                     "ScrollRect SeedFill CalcMask GetPixel Random DeltaPoint "
+                     "StdText StuffHex Move MoveTo Line LineTo CopyMask CopyBits",
+                     "Rect Rgn Poly Oval Arc Pic Pen Pt Port Clip Cursor Bits Text "
+                     "Draw Std Paint Frame Fill Invert Inver Erase Hilite Color"),
+    ("OS Utilities", "OSDispatch StripAddress SysEnvirons Gestalt Delay ShutDown "
+                     "ReadDateTime GetDateTime SetDateTime DateToSeconds SecondsToDate "
+                     "ExitToShell Launch Chain Debugger DebugStr SwapMMUMode Status "
+                     "Enqueue Dequeue HWPriv AUXDispatch DisplayDispatch Unimplemented",
+                     ""),
+    ("Toolbox Util", "Munger GetIcon PlotIcon ShieldCursor",
+                     "Bit HiWord LoWord LongMul Num Str IU"),
+]
+
+_EXACT = {n: m for m, ex, _ in MANAGERS for n in ex.split()}
+_SUBSTR = [(s, m) for m, _, sub in MANAGERS for s in sub.split()]
+
+
+def manager(name):
+    """Which Toolbox manager a trap belongs to, or None if the table lacks it."""
+    if not name:
+        return None
+    if name in _EXACT:
+        return _EXACT[name]
+    for needle, mgr in _SUBSTR:
+        if needle in name:
+            return mgr
+    return None
+
+
+def implemented_traps(path):
+    """Trap words a C HAL dispatches, read from its `case 0xAxxx:` labels."""
+    src = open(path, encoding="utf-8", errors="replace").read()
+    return {int(w, 16) for w in re.findall(r"case\s+0x([Aa][0-9A-Fa-f]{3})\s*:", src)}
+
+
+def report_coverage(total, hal_path):
+    """Print the implemented/missing split, grouped into work packages."""
+    impl = implemented_traps(hal_path)
+    sites = sum(total.values())
+    hit_sites = sum(c for w, c in total.items() if w in impl)
+    hit_kinds = sum(1 for w in total if w in impl)
+    pct = lambda a, b: 100 * a // b if b else 0
+
+    print(f"\n=== COVERAGE vs {os.path.basename(hal_path)} ===")
+    print(f"  call sites  {hit_sites}/{sites} ({pct(hit_sites, sites)}%)")
+    print(f"  distinct    {hit_kinds}/{len(total)} ({pct(hit_kinds, len(total))}%)")
+
+    by_mgr, unknown = {}, []
+    for w, c in total.items():
+        name = trap_name(w)
+        mgr = manager(name)
+        if mgr is None:
+            unknown.append((c, name or f"?${w:04X}"))
+            mgr = "unclassified"
+        d = by_mgr.setdefault(mgr, {"have": 0, "need": 0, "missing": []})
+        if w in impl:
+            d["have"] += c
+        else:
+            d["need"] += c
+            d["missing"].append((c, name or f"${w:04X}"))
+
+    rows = sorted(by_mgr.items(), key=lambda kv: -kv[1]["need"])
+    print("\n  missing, by manager, ranked by call sites:")
+    for mgr, d in rows:
+        if not d["need"]:
+            continue
+        top = sorted(d["missing"], reverse=True)
+        names = ", ".join(n for _, n in top[:6])
+        more = "" if len(top) <= 6 else f", +{len(top) - 6} more"
+        print(f"    {d['need']:>5} sites {len(top):>3} traps  {mgr:<14} {names}{more}")
+
+    done = [m for m, d in rows if d["have"] and not d["need"]]
+    if done:
+        print(f"\n  fully covered: {', '.join(sorted(done))}")
+    if unknown:
+        print(f"\n  {len(unknown)} trap(s) not in the manager table: "
+              + ", ".join(n for _, n in sorted(unknown, reverse=True)[:12]))
+
+    return {
+        "sites_total": sites, "sites_covered": hit_sites,
+        "distinct_total": len(total), "distinct_covered": hit_kinds,
+        "by_manager": {
+            m: {"have": d["have"], "need": d["need"],
+                "missing": [n for _, n in sorted(d["missing"], reverse=True)]}
+            for m, d in by_mgr.items()
+        },
+    }
+
+
+def looks_like_data(total):
+    """True if the 'trap set' looks like noise rather than a real one.
+
+    Real 68k code reuses a small set of traps heavily -- SetPort and friends run
+    to hundreds of sites -- so distinct/sites sits near 0.1-0.2. Encrypted or
+    packed segments disassemble to random words, where almost every hit is
+    unique and the ratio approaches 1. Catches pointing the scanner at a
+    protected title's still-encrypted CODE, which otherwise reports a confident
+    and completely wrong trap set.
+
+    ponytail: one ratio, no entropy test. If a real title ever trips it, print
+    the ratio and raise the threshold rather than reaching for something clever.
+    """
+    sites = sum(total.values())
+    if sites < 50:
+        return None
+    ratio = len(total) / sites
+    return ratio if ratio > 0.40 else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("code_dir", help="directory of CODE_*.bin from extract_resources.py")
     ap.add_argument("--json", help="write full result JSON here")
+    ap.add_argument("--coverage", metavar="TOOLBOX_C",
+                    help="report how much of this title's trap set the HAL "
+                         "already dispatches (e.g. runtime/toolbox.c)")
     args = ap.parse_args()
 
     files = sorted(glob.glob(os.path.join(args.code_dir, "CODE_*.bin")), key=seg_id)
@@ -90,13 +254,22 @@ def main():
     print(f"\n=== TRAP SET: {len(total)} distinct, {sum(total.values())} total sites ===")
     for name, w, c in named:
         print(f"  {c:4d}x  ${w:04X}  {name}")
+    ratio = looks_like_data(total)
+    if ratio is not None:
+        print(f"\n  !! {len(total)} distinct traps over {sum(total.values())} sites "
+              f"({ratio:.0%} unique) -- this does not look like 68k code.\n"
+              f"     Protected titles must be run through unprotect.py first; "
+              f"scan the decrypted segments (work/unpacked/), not work/code/.")
+
     unknown = [n for n, w, c in named if n.startswith("?$")]
     if unknown:
         print(f"\n  {len(unknown)} unnamed word(s) (likely embedded data, not traps): "
               + ", ".join(unknown))
 
+    cov = report_coverage(total, args.coverage) if args.coverage else None
+
     if args.json:
-        json.dump({"jump_table": jt, "per_segment": per_seg,
+        json.dump({"jump_table": jt, "per_segment": per_seg, "coverage": cov,
                    "traps": [{"word": f"0x{w:04X}", "name": trap_name(w), "count": c}
                              for _, w, c in named]},
                   open(args.json, "w"), indent=2)

@@ -9,6 +9,7 @@ add_library(macrecomp STATIC
     runtime/macrecomp.c     # version
     runtime/m68k.c          # CPU state, memory, flags, function table/dispatch
     runtime/quickdraw.c     # 1-bit framebuffer + drawing primitives
+    runtime/dialog.c        # Dialog + Control Manager over QuickDraw
     runtime/toolbox.c       # A-trap dispatch (Pascal/register conventions)
     runtime/platform_sdl.c  # SDL2 window, present, input
 )
@@ -27,13 +28,17 @@ else()
         target_link_libraries(macrecomp PUBLIC ${SDL2_LIBRARIES})
     endif()
 endif()
-target_link_libraries(macrecomp PUBLIC m)
+if(NOT MSVC)
+    target_link_libraries(macrecomp PUBLIC m)
+endif()
 
 option(MACRECOMP_EXAMPLES "Build example harnesses" OFF)
 if(MACRECOMP_EXAMPLES)
     add_executable(hal_selftest examples/hal_selftest.c
-        runtime/quickdraw.c runtime/toolbox.c runtime/m68k.c)
+        runtime/quickdraw.c runtime/toolbox.c runtime/dialog.c runtime/m68k.c)
     target_compile_definitions(hal_selftest PRIVATE MACRECOMP_NO_TRAP_STUB)
     target_include_directories(hal_selftest PRIVATE include)
-    target_link_libraries(hal_selftest m)
+    if(NOT MSVC)
+        target_link_libraries(hal_selftest m)
+    endif()
 endif()

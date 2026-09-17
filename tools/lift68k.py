@@ -11,10 +11,15 @@ Usage:
       --jt work/unpacked/jumptable.json -o src/gen
 """
 import argparse, json, os, re
+from collections import Counter
 from capstone import Cs, CS_ARCH_M68K, CS_MODE_M68K_000
 
 md = Cs(CS_ARCH_M68K, CS_MODE_M68K_000); md.skipdata = True
 STAT = {"total": 0, "unimpl": 0, "traps": 0}
+# Instructions whose operands parse() could not read, by "mnemonic operands".
+# Ranked at the end of a run: the top entries are the addressing modes worth
+# teaching parse() next.
+UNPARSED = Counter()
 
 CC = {"ra":"1","t":"1","f":"0","hi":"(!M.c&&!M.z)","ls":"(M.c||M.z)","cc":"(!M.c)",
       "hs":"(!M.c)","cs":"(M.c)","lo":"(M.c)","ne":"(!M.z)","eq":"(M.z)","vc":"(!M.v)",
@@ -39,8 +44,15 @@ def mem(addr,sz,pre=(),post=()):
     return Op(r=rd(sz,addr), w=lambda v: wr(sz,addr,v), pre=pre, post=post, addr=addr)
 
 
+def norm_op(tok):
+    """capstone writes indexed modes as "$74(a5, d7.w)"; every operand pattern
+    here spells them without the space. Normalise in one place -- missing this
+    silently drops a whole addressing mode to unimplemented."""
+    return re.sub(r",\s+", ",", tok.strip())
+
+
 def parse(tok,sz):
-    t=tok.strip()
+    t=norm_op(tok)
     if (m:=re.fullmatch(r"d(\d)",t)):
         n=int(m.group(1))
         r = f"M.d[{n}]" if sz==4 else f"(uint{sz*8}_t)M.d[{n}]"
@@ -66,11 +78,48 @@ def parse(tok,sz):
         xr=m.group(3); xn=int(m.group(4)); xl=m.group(5)=="l"
         idx=f"M.{xr}[{xn}]" if xl else f"(int32_t)(int16_t)M.{xr}[{xn}]"
         return mem(f"(M.a[{n}]+{d}+{idx})",sz)
+    if (m:=re.fullmatch(r"\(a(\d),(d|a)(\d)\.(w|l)\)",t)):   # (An,Xn) -- no displacement
+        n=int(m.group(1)); xr=m.group(2); xn=int(m.group(3)); xl=m.group(4)=="l"
+        idx=f"M.{xr}[{xn}]" if xl else f"(int32_t)(int16_t)M.{xr}[{xn}]"
+        return mem(f"(M.a[{n}]+{idx})",sz)
+    if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc,(d|a)(\d)\.(w|l)\)",t)):
+        off=int(m.group(1).replace("$","0x"),0)&0xFFFFFFFF
+        xr=m.group(2); xn=int(m.group(3)); xl=m.group(4)=="l"
+        idx=f"M.{xr}[{xn}]" if xl else f"(int32_t)(int16_t)M.{xr}[{xn}]"
+        return mem(f"(g_seg_base+0x{off:x}u+{idx})",sz)
     if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc\)",t)):
         off=int(m.group(1).replace("$","0x"),0)&0xFFFFFFFF; return mem(f"(g_seg_base+0x{off:x}u)",sz)
     if (m:=re.fullmatch(r"\$?([0-9a-fA-F]+)\.(w|l)",t)):
         return mem(f"0x{int(m.group(1),16):x}u",sz)
     return None
+
+
+def not_68000(code, start, probe=16, window=96):
+    """True if disassembling from `start` yields forms a 68000 cannot encode.
+
+    capstone decodes 68020 addressing even in M68K_000 mode, so memory-indirect
+    `([$fffc,a2])` and a scaled index `(a0,d3.l * 4)` both render happily -- but
+    a 68000 binary cannot contain either, and neither can an undecodable
+    extension word. Their presence at a candidate function start proves it is
+    not an instruction boundary: data, or a stream begun mid-instruction.
+
+    Same argument as the word-alignment rule: an architectural impossibility,
+    not a heuristic. Only the first `probe` instructions are examined, because
+    real functions often carry data (jump tables, strings) after their code.
+    """
+    seen = 0
+    for ins in md.disasm(code[start:min(start+window, len(code))], start):
+        if seen >= probe:
+            break
+        seen += 1
+        op = ins.op_str
+        if "([" in op:                                   # 68020 memory indirect
+            return True
+        if re.search(r"\.[wl]\s*\*\s*[248]\b", op):      # 68020 scaled index
+            return True
+        if "invalid" in op:                              # undecodable extension word
+            return True
+    return False
 
 
 def ops_of(ins):
@@ -113,7 +162,7 @@ def regref(r):    # 'd3'->'M.d[3]', 'a5'->'M.a[5]'
 
 
 def indirect_call(tok):
-    t=tok.strip()
+    t=norm_op(tok)
     if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(a5\)",t)):
         return f"m68k_jt_call(0x{int(m.group(1).replace('$','0x'),0)&0xffff:x}u);"
     if (m:=re.fullmatch(r"\(a(\d)\)",t)): return f"m68k_call(M.a[{m.group(1)}]);"
@@ -127,7 +176,7 @@ def indirect_call(tok):
 def indirect_jump(tok):
     """A jmp is a tail transfer (goto/tail-call), NOT a subroutine call: it must
     not push a return address. Mirror indirect_call but with m68k_jump."""
-    t=tok.strip()
+    t=norm_op(tok)
     if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(a5\)",t)):
         return f"m68k_jt_jump(0x{int(m.group(1).replace('$','0x'),0)&0xffff:x}u);"
     if (m:=re.fullmatch(r"\(a(\d)\)",t)): return f"m68k_jump(M.a[{m.group(1)}]);"
@@ -135,10 +184,36 @@ def indirect_jump(tok):
         d=int(m.group(1).replace("$","0x"),0); n=int(m.group(2)); return f"m68k_jump(M.a[{n}]+{d});"
     if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc\)",t)):
         return f"m68k_jump(g_seg_base+0x{int(m.group(1).replace('$','0x'),0)&0xffffffff:x}u);"
+    # Computed jump (the 68k switch). Lifted for completeness; note that
+    # m68k_jump can only resolve a registered function start, so a computed
+    # target landing mid-function still fails -- see ROADMAP, entry dispatch.
+    if (m:=re.fullmatch(r"(-?\$?[0-9a-fA-F]+)\(pc,(d|a)(\d)\.(w|l)\)",t)):
+        off=int(m.group(1).replace("$","0x"),0)&0xFFFFFFFF
+        xr=m.group(2); xn=int(m.group(3)); xl=m.group(4)=="l"
+        idx=f"M.{xr}[{xn}]" if xl else f"(int32_t)(int16_t)M.{xr}[{xn}]"
+        return f"m68k_jump(g_seg_base+0x{off:x}u+{idx});"
     return None
 
 
 def emit(ins, targets):
+    """Lift one instruction, degrading to a counted m68k_unimplemented() stub
+    when an operand form parse() does not know turns up.
+
+    Most branches below check their operands, but not all did, and an unhandled
+    addressing mode used to take down the whole segment with an AttributeError
+    on None. A single unknown mode is a coverage number, not a build failure --
+    which is what this file's header promises. The form is recorded in UNPARSED
+    so the gap can be ranked and closed."""
+    saved = dict(STAT)
+    try:
+        return emit_inner(ins, targets)
+    except (AttributeError, TypeError, IndexError, ValueError):
+        STAT.clear(); STAT.update(saved)          # discard the partial attempt
+        UNPARSED[f"{ins.mnemonic} {ins.op_str}"] += 1
+        return [unimpl(ins)], False
+
+
+def emit_inner(ins, targets):
     mn=ins.mnemonic; base=mn.split(".")[0]; sz=size_of(mn); ops=ops_of(ins)
     C=[]; term=False
     P=lambda tok,s=sz: parse(tok,s)
@@ -224,7 +299,27 @@ def emit(ins, targets):
             for r in regs:
                 C.append((f"{regref(r)}=m68k_r32(SP); SP+=4;" if n==7
                           else f"{regref(r)}=m68k_r32(M.a[{n}]); M.a[{n}]+=4;"))
-        else: C.append(unimpl(ins))
+        else:
+            # General effective-address forms: movem <ea>,regs and movem regs,<ea>.
+            # Registers transfer in ascending order (d0-d7 then a0-a7) from the
+            # EA upward; only the predecrement form above reverses. This is the
+            # frame-pointer epilogue -- `movem.l -$10(a6),d2-d3/a2-a3` -- so it
+            # shows up in almost every compiled routine.
+            load = bool(reglist(ops[1]))
+            regs = reglist(ops[1]) if load else reglist(ops[0])
+            ea   = P(ops[0],4) if load else P(ops[1],4)
+            if regs and ea is not None and ea.addr is not None:
+                C.append(f"{{ uint32_t _ea={ea.addr};")
+                for i,r in enumerate(regs):
+                    off=i*sz
+                    if load:
+                        v=f"m68k_r{sz*8}(_ea+{off}u)"
+                        if sz==2: v=f"(uint32_t)(int32_t)(int16_t)({v})"
+                        C.append(f"  {regref(r)}={v};")
+                    else:
+                        C.append(f"  m68k_w{sz*8}(_ea+{off}u,{regref(r)});")
+                C.append("}")
+            else: C.append(unimpl(ins))
     elif base in ("lsl","lsr","asl","asr"):
         fn={"lsl":"m68k_lsl","lsr":"m68k_lsr","asl":"m68k_asl","asr":"m68k_asr"}[base]
         cnt = P(ops[0]).imm if P(ops[0]) and P(ops[0]).imm is not None else None
@@ -419,19 +514,34 @@ def main():
         if mn in ("bra","jmp") or mn.startswith("db") or re.fullmatch(r"b(hi|ls|cc|hs|cs|lo|ne|eq|vc|vs|pl|mi|ge|lt|gt|le)",mn):
             bm=re.search(r"\$([0-9a-fA-F]+)\s*$", op)       # trailing bare-hex branch target
             if bm: branches.append((ins.address, int(bm.group(1),16)))
+
     for tok in a.entry.split(","):
         if tok.strip(): starts.add(int(tok,0))
     # refine: any branch whose target lands in a *different* function than the
     # branch (dual-entry / shared-tail routines) makes that target its own function
     for _ in range(6):
-        offs=sorted(x for x in starts if x<len(code))
+        offs=sorted(x for x in starts if x<len(code) and not(x&1))
         added=False
         for fa,t in branches:
-            if not(0<=t<len(code)) or t in starts: continue
-            s=max(o for o in offs if o<=fa); e=min([o for o in offs if o>fa]+[len(code)])
+            if not(0<=t<len(code)) or (t&1) or t in starts: continue
+            # A branch can sit below every known entry (code ahead of the first
+            # jump-table routine); that region starts at 0.
+            s=max((o for o in offs if o<=fa), default=0)
+            e=min([o for o in offs if o>fa]+[len(code)])
             if not(s<=t<e): starts.add(t); added=True
         if not added: break
-    offs=sorted(x for x in starts if x<len(code))
+    # The 68000 fetches instructions on word boundaries, so a function can never
+    # start at an odd address. An odd "start" is a false positive from scanning
+    # data as code: disassembling from it lands mid-instruction and every
+    # instruction after it decodes as garbage, which then runs as if it were the
+    # program. Drop them.
+    dropped=sorted(x for x in starts if x<len(code) and (x&1))
+    offs=sorted(x for x in starts if x<len(code) and not(x&1))
+    # Second filter, same argument as the first: reject a start whose stream
+    # decodes to addressing modes a 68000 does not have.
+    notcode=[x for x in offs if not_68000(code, x)]
+    if notcode:
+        offs=[x for x in offs if x not in set(notcode)]
     bounds=list(zip(offs, offs[1:]+[len(code)]))
     fns=[]
     for start,end in bounds:
@@ -452,6 +562,19 @@ def main():
     print(f"CODE {a.seg}: {len(fns)} functions, {STAT['total']} insns, "
           f"{STAT['unimpl']} unimplemented, {STAT['traps']} traps -> {path}")
     print(f"  instruction coverage: {cov:.1f}%")
+    if dropped:
+        print(f"  dropped {len(dropped)} odd-addressed function start(s) "
+              f"(data misread as code)")
+    if notcode:
+        print(f"  dropped {len(notcode)} start(s) decoding to non-68000 forms "
+              f"(data misread as code)")
+    if UNPARSED:
+        n = sum(UNPARSED.values())
+        print(f"  {n} insn(s) in {len(UNPARSED)} form(s) had operands parse() "
+              f"cannot read; most common:")
+        for form, c in UNPARSED.most_common(12):
+            print(f"    {c:5d}x  {form}")
+
 
 
 if __name__=="__main__":

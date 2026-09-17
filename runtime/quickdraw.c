@@ -4,6 +4,7 @@
  * the SDL layer packs to RGBA). */
 #include "macrecomp/toolbox.h"
 #include "macrecomp/m68k.h"
+#include "font5x7.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -51,6 +52,7 @@ static int getpix(int h, int v){
 void qd_init(void){ memset(qd_fb, 0, sizeof qd_fb); pen_h=pen_v=0; pen_w=pen_h_sz=1;
                     pen_black=1; pen_mode=0; rect_set(&clip,0,0,QD_W,QD_H); }
 void qd_set_clip(const Rect *r){ if(r) clip=*r; }
+void qd_get_clip(Rect *r){ if(r) *r=clip; }
 void qd_pen_size(int w, int h){ pen_w=w>0?w:1; pen_h_sz=h>0?h:1; }
 void qd_pen_mode(int mode){ pen_mode=mode; }
 void qd_pen_pat_black(int black){ pen_black=black?1:0; }
@@ -98,8 +100,21 @@ void qd_frame_oval(const Rect *r){ oval(r,0,pen_black); }
 void qd_fill_oval(const Rect *r, int black){ oval(r,1,black); }
 
 /* tiny 5x7 glyphs are overkill here; draw text as filled boxes so strings show */
-void qd_draw_char(int c){ if(c!=' '){ Rect r; rect_set(&r,pen_h,pen_v-7,pen_h+5,pen_v-1);
-    qd_frame_rect(&r);} pen_h+=6; }
+/* Text. The pen sits on the baseline, as QuickDraw defines it, so a glyph
+ * occupies the FONT_ROWS rows above it. Fixed pitch: five columns and one of
+ * side bearing. Characters outside the font's range advance without drawing. */
+#define GLYPH_W (FONT_COLS + 1)
+void qd_draw_char(int c){
+    c &= 0xFF;
+    if(c >= FONT_FIRST && c <= FONT_LAST){
+        const uint8_t *g = FONT5X7[c - FONT_FIRST];
+        for(int col=0; col<FONT_COLS; col++)
+            for(int row=0; row<FONT_ROWS; row++)
+                if(g[col] & (1u << row)) put(pen_h+col, pen_v-FONT_ROWS+row, pen_black);
+    }
+    pen_h += GLYPH_W;
+}
+int qd_text_width(int len){ return len*GLYPH_W; }
 void qd_draw_text(const uint8_t *p, int len){ for(int i=0;i<len;i++) qd_draw_char(p[i]); }
 
 /* CopyBits: 1-bit source (row-padded to src_rowbytes) -> framebuffer, scaled by

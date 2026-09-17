@@ -75,19 +75,55 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 |-----------|--------------|-------|
 | `extract_resources.py` | DiskCopy 4.2 / raw HFS → CODE segments, asset catalog, `inventory.json` | ✅ working |
 | `disasm_code.py` | capstone-M68K disassembly, annotated with traps + A5 jump-table calls | ✅ working |
-| `scan_traps.py` | enumerate A-line (`$Axxx`) Toolbox traps; parse the CODE 0 jump table | ✅ working (validated on Finder) |
+| `scan_traps.py` | enumerate A-line (`$Axxx`) Toolbox traps; parse the CODE 0 jump table; `--coverage` scores them against the HAL | ✅ working (validated on Finder, Shufflepuck, HyperCard) |
 | `traps.json` | 1177 trap word↔name mappings (Inside Macintosh) for the two tools above | ✅ |
 | `pict2png.py` | decode 1-bit QuickDraw PICT (v1) resources → PNG (BitsRect/PackBitsRect) | ✅ |
 | `unprotect.py` | statically unpack self-decrypting/protected CODE | ✅ **fully solved** (jump table + segment bodies, byte-exact) |
 | `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
-| `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL) | ✅ **98–100% instruction coverage** |
+| `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); rejects function starts that are provably not code | ✅ **97–100% instruction coverage** |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
 | runtime `quickdraw.c` + `platform_sdl.c`: 1-bit framebuffer + pen/rect/line/oval/text/CopyBits → SDL2 window | the video HAL | ✅ core (self-tested) |
-| runtime `toolbox.c`: A-trap dispatch, Resource Mgr (serves the app's resources), QuickDraw incl. **CopyBits + DrawPicture**, Window/Menu/Dialog/File stubs, Memory Mgr heap | the OS HAL | 🟢 ~95 traps; boots real games |
+| runtime `toolbox.c`: A-trap dispatch, Resource Mgr (serves the app's resources), QuickDraw incl. **CopyBits + DrawPicture + regions**, Window/Menu/File stubs, Memory Mgr heap | the OS HAL | 🟢 ~190 traps; boots real games |
+| runtime `dialog.c`: **Dialog + Control Manager** — DITL parsing, ModalDialog, ParamText, ControlRecords | dialogs and buttons | 🟢 working (self-tested) |
+| runtime `font5x7.h` | original 5×7 bitmap font for the QuickDraw text primitives | ✅ fixed-pitch stand-in |
+| entry-point dispatch (enter a lifted function at an interior address) | needed for register-indirect jumps | ⬜ **next** |
 | Sound (ASND) · full Menu/Dialog interaction | | ⬜ |
 
+### Measured scope
+
+`scan_traps.py --coverage` scores a title's trap set against the HAL, so the
+cost of a title is a number before any of it is lifted:
+
+| Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered |
+|---|---|---|---|---|---|
+| Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** |
+| HyperCard 1.x | 326 KB | 22 | 418 | 3166 | **76%** |
+
+```bash
+python tools/scan_traps.py work/unpacked --coverage runtime/toolbox.c
+```
+
 First customer: [**shufflepuck-cafe**](https://github.com/sp00nznet/shufflepuck-cafe)
-(Broderbund, 1988) — 6 CODE segments, ~52 KB of 68k, B&W QuickDraw.
+(Broderbund, 1988) — 6 CODE segments, ~53 KB of 68k, B&W QuickDraw.
+
+**HyperCard boots.** All 21 CODE segments lift at 97-100% instruction coverage,
+a whole run hits only two unimplemented instructions, and it executes ~305
+Toolbox calls: the full init sequence (InitGraf/InitFonts/InitWindows/TEInit/
+InitDialogs), then its own resources.
+
+It does **not** currently render. An earlier build drew HyperCard's own error
+dialog -- from its real `ALRT`/`DITL` resources, with legible text -- which was
+how the ROM-version check and the Dialog Manager got verified. Fixing the lifter
+bugs behind that check moved execution past the error path, and it now stops
+earlier, before anything is drawn, on an indirect jump into the middle of a
+function. The function table can only enter a function at its first instruction,
+so that address does not resolve. [ROADMAP.md](ROADMAP.md) has the diagnosis and
+the fix (entry-point dispatch).
+
+Next target: **HyperCard** itself. It is one 68k `APPL`, and recompiling it makes
+every HyperCard stack a target at once rather than one title at a time — which
+is why the stack repos that consume it stay nearly empty. The ranked trap gap is
+in [ROADMAP.md](ROADMAP.md).
 
 ## Using macrecomp in your project
 

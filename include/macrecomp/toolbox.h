@@ -35,11 +35,13 @@ void qd_fill_rect(const Rect *r, int black);
 void qd_frame_oval(const Rect *r);
 void qd_fill_oval(const Rect *r, int black);
 void qd_draw_char(int c);
+int  qd_text_width(int len);   /* width of len chars in the current font */
 void qd_draw_text(const uint8_t *p, int len);
 /* CopyBits: blit a 1-bit source into the framebuffer (core of the game's art). */
 void qd_copybits(const uint8_t *src, int src_rowbytes, int sw, int sh,
                  const Rect *srcR, const Rect *dstR, int mode);
 void qd_set_clip(const Rect *r);
+void qd_get_clip(Rect *r);
 /* set the current drawing target: the screen (is_screen=1) or a 1-bit BitMap in
  * guest memory (base/rowbytes and the bitmap bounds' left/top origin) */
 void qd_set_port(int is_screen, uint32_t base, int rowbytes, int bl, int bt);
@@ -51,6 +53,31 @@ void rect_inset(Rect *r, int dh, int dv);
 int  rect_union(const Rect *a, const Rect *b, Rect *out);
 int  rect_sect(const Rect *a, const Rect *b, Rect *out);
 int  pt_in_rect(int h, int v, const Rect *r);
+
+/* ---- Dialog + Control Manager (dialog.c) ----
+ * Dialogs are parsed from their DITL into a host-side item table; the guest
+ * sees a DialogPtr and, for control items, a real ControlRecord. */
+uint32_t dlg_new(uint32_t dlgptr, uint32_t ditl, uint32_t arena, uint32_t arena_end);
+void dlg_set_bounds(uint32_t dlgptr, const Rect *b);  /* place window + items */
+void dlg_dispose(uint32_t dlgptr);
+int  dlg_count(uint32_t dlgptr);
+int  dlg_get_item(uint32_t dlgptr, int n, int *type, uint32_t *h, Rect *box);
+void dlg_set_item_rect(uint32_t dlgptr, int n, const Rect *box);
+void dlg_set_text_h(uint32_t itemHandle, uint32_t pstr);  /* SetDialogItemText */
+void dlg_get_text_h(uint32_t itemHandle, uint32_t out);   /* GetDialogItemText */
+void dlg_hide_item(uint32_t dlgptr, int n, int hide);
+void dlg_param_text(uint32_t p0, uint32_t p1, uint32_t p2, uint32_t p3);
+int  dlg_find_item(uint32_t dlgptr, int h, int v);  /* 0-based, -1 = none */
+void dlg_draw(uint32_t dlgptr);
+int  dlg_modal(uint32_t dlgptr);                    /* 1-based item hit */
+
+uint32_t ctl_new(uint32_t owner, const Rect *box, const uint8_t *title,
+                 int vis, int value, int min, int max, uint32_t rec);
+int  ctl_value(uint32_t c);
+void ctl_set_value(uint32_t c, int v);
+void ctl_set_hilite(uint32_t c, int h);
+Rect ctl_rect(uint32_t c);
+void ctl_draw(uint32_t c);
 
 /* ---- platform (platform_sdl.c) ---- */
 int  plat_open(const char *title, int scale);   /* create window; returns 0 ok */

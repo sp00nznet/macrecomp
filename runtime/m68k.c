@@ -81,15 +81,32 @@ void m68k_jump(uint32_t addr) {
 
 /* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the
  * decrypted jump table (a5 offset -> target code address). Stub until Phase 5. */
-static uint32_t jt_map[8192];
-void m68k_jt_set(uint32_t a5off, uint32_t addr) { if (a5off < sizeof(jt_map)/4) jt_map[a5off/2] = addr; }
+/* Indexed by A5 offset in words: entries are 8 bytes apart but code calls
+ * entry+2, so word granularity covers both alignments.
+ *
+ * One capacity, one predicate, used by all three functions. They previously
+ * disagreed -- set accepted a5off < 8192 while call accepted a5off < 65536 --
+ * so a large jump table had its tail silently dropped on the way in and read
+ * back as zero, giving a null dispatch a long way from the cause. An entry that
+ * does not fit now says so.
+ *
+ * ponytail: a flat array. 32K words covers a 64 KB jump table, far past the
+ * 8880 bytes HyperCard ships; make it a hash if a title ever exceeds that. */
+#define JT_WORDS 32768
+static uint32_t jt_map[JT_WORDS];
+static int jt_ok(uint32_t a5off) { return a5off / 2 < JT_WORDS; }
+
+void m68k_jt_set(uint32_t a5off, uint32_t addr) {
+    if (jt_ok(a5off)) jt_map[a5off / 2] = addr;
+    else fprintf(stderr, "m68k_jt_set: A5+%x beyond the jump-table map\n", a5off);
+}
 void m68k_jt_call(uint32_t a5off) {
-    uint32_t addr = (a5off < sizeof(jt_map)*2) ? jt_map[a5off/2] : 0;
+    uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
     if (addr) m68k_call(addr);
     else fprintf(stderr, "m68k_jt_call: unmapped A5+%x\n", a5off);
 }
 void m68k_jt_jump(uint32_t a5off) {   /* tail jmp through the jump table */
-    uint32_t addr = (a5off < sizeof(jt_map)*2) ? jt_map[a5off/2] : 0;
+    uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
     if (addr) m68k_jump(addr);
     else fprintf(stderr, "m68k_jt_jump: unmapped A5+%x\n", a5off);
 }
