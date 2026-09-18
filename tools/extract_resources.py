@@ -90,16 +90,56 @@ def find_app(vol, want=None):
     return appls[0]
 
 
+def dump_forks(vol, out):
+    """Write every file's two forks, and an index naming them.
+
+    A classic-Mac file is two streams, and an application opens them by name
+    through the File Manager -- so a HAL that wants to serve real files needs
+    both forks of every file, not just the resources of one application. Names
+    are kept verbatim in files.json (they may contain '/' or ':' or non-ASCII)
+    and the files themselves are numbered, so the index is the only place the
+    original name has to survive."""
+    out.mkdir(parents=True, exist_ok=True)
+    index = []
+    for n, (path, f) in enumerate(sorted(walk_files(vol))):
+        data, rsrc = bytes(f.data or b""), bytes(f.rsrc or b"")
+        if data: (out / f"{n}.data").write_bytes(data)
+        if rsrc: (out / f"{n}.rsrc").write_bytes(rsrc)
+        index.append({"n": n, "path": path, "name": path.rsplit("/", 1)[-1],
+                      "type": f.type.decode("mac_roman", "replace"),
+                      "creator": f.creator.decode("mac_roman", "replace"),
+                      "data": len(data), "rsrc": len(rsrc)})
+    (out / "files.json").write_text(json.dumps({"volume": vol.name, "files": index}, indent=2))
+    tot = sum(e["data"] + e["rsrc"] for e in index)
+    print(f"forks: {len(index)} files, {tot} bytes -> {out}/")
+
+
+def walk_files(vol):
+    def walk(folder, path=""):
+        for name, item in folder.items():
+            p = path + "/" + name
+            if hasattr(item, "items"):
+                yield from walk(item, p)
+            else:
+                yield p, item
+    return walk(vol)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("image", help="DiskCopy 4.2 / raw HFS disk image")
     ap.add_argument("-o", "--out", default="work", help="output dir (default: work)")
     ap.add_argument("--file", help="extract this filename instead of the first APPL")
+    ap.add_argument("--forks", metavar="DIR",
+                    help="also write EVERY file's data and resource forks to DIR, "
+                         "plus files.json -- what a File Manager HAL serves")
     args = ap.parse_args()
 
     raw = Path(args.image).read_bytes()
     vol = Volume(); vol.read(load_hfs(raw))
+    if args.forks:
+        dump_forks(vol, Path(args.forks))
     path, app = find_app(vol, args.file)
     print(f"volume {vol.name!r}  app {path!r}  "
           f"type={app.type} creator={app.creator} data={len(app.data or b'')} "

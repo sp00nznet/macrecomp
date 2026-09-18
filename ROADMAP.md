@@ -8,7 +8,7 @@ by guess — the numbers come from `scan_traps.py --coverage`.
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered | Traps covered |
 |---|---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** | 69% |
-| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **79%** | 52% |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **80%** | 54% |
 
 Reproduce either row:
 
@@ -141,12 +141,54 @@ prints the whole shadow stack at every trap; `MRMAXLOOPS=<n>` (with
 MSYS2 toolchain here is broken -- missing `libxxhash.dll` -- so a native
 backtrace was never available, and these stand in for it.
 
-### Next
+### File Manager (landed) -- and why the catalog still is not on screen
 
-`m68k_jump: no function at cbfe0000`, 59 times in a run, is the next thread to
-pull: `0xCBFE0000` is one bit away from the `0xCAFE0000` return sentinel, which
-suggests something is arithmetic on a return address rather than a genuine
-target.
+`runtime/files.c` serves a title's own media read-only: `Open`/`OpenRF`,
+`Read`, `Close`, `GetEOF`, `Get`/`SetFPos`, `GetFileInfo`, `GetVol`/`SetVol`,
+and the `FSDispatch`/`HFSDispatch` selectors worth answering. These are **OS
+traps** -- A0 is the parameter block, D0 the result -- so nothing is read off
+the Pascal stack. Forks are read from the host on demand: one CD-ROM's forks are
+422 MB and a stack is read a few hundred bytes at a time.
+
+`extract_resources.py --forks DIR` writes every file's two forks plus a
+`files.json` index, which is what a File Manager HAL needs and what extracting
+one application's resources does not give you.
+
+Writes report `wrPermErr` rather than succeeding silently. A title told it
+cannot write can say so; one told "fine" loses data.
+
+Covered by `examples/hal_selftest.c`: open, `fnfErr` for a missing file, a read
+from the mark, `GetFPos`, an absolute `SetFPos`, a read across the end that
+delivers a short count *and* `eofErr`, `wrPermErr` on write, and `rfNumErr`
+after close. 79% -> **80%** of call sites.
+
+**HyperCard still does not open a stack**, and the reason is no longer the File
+Manager. Traced through:
+
+```
+fn_3_00e4 -> fn_21_1e1e -> fn_21_1bec -> Open glue -> _Open
+```
+
+`fn_21_1bec` does `movea.l $8(a6),a4` and then addresses everything as
+`-$4ae(a4)` -- the parameter block is a local in its *caller's* frame, and the
+caller passes its own `a6`. The pointer arriving at `_Open` is `0xFFFFFB52`,
+which is exactly `-0x4ae` with **a4 = 0**: the caller's frame pointer was null.
+A5 is correct (checked), `link`/`unlk` lift correctly (checked), and the
+call does enter `fn_21_1e1e` at its start, where `link.w a6,#$f304` runs. So a
+valid frame pointer is becoming 0 somewhere between that `link` and the
+`move.l a6,-(a7)` that passes it. That is the next thread, and it is a lifter or
+calling-convention question rather than a HAL one.
+
+Two other leads, both probably the same fault: `m68k_jump: no function at
+000000` fires repeatedly through this sequence (a return address or function
+pointer reading as null), and `no function at cbfe0000` -- one bit from the
+`0xCAFE0000` return sentinel -- suggests arithmetic landing on a return address.
+
+Deliberately **not** built: the Finder startup handshake (an `AppParmHandle`
+block that `CountAppFiles`/`GetAppFiles` walk to learn which document to open).
+It was written, then removed unused -- HyperCard 1.2.2 never calls
+`GetAppParms`, so it was forty lines answering a question nothing asked. The
+layout is recorded in a comment for whenever a title does ask.
 
 Two other things the run settled:
 
@@ -210,7 +252,6 @@ trap implemented.
 | 162 | 47 | **QuickDraw, the tail** | `EmptyRect`, `Pt2Rect`, `GetPen`, `SetCursor`, `SetStdProcs`. Individually trivial; it is a long tail, not a structure. |
 | 88 | 17 | **SANE** | `FP68K`, `Elems68K`, `DECSTR68K`, the `Fix`/`Frac`/`X2` conversions. The one genuinely new subsystem left: 80-bit extended arithmetic, a package rather than a HAL passthrough. HyperTalk arithmetic needs it. |
 | 41 | 14 | Window Manager | `MoveWindow`, `FindWindow`, `DragWindow` — real windows rather than one full-screen port. |
-| 39 | 20 | File Manager | `HFSDispatch`, `FSDispatch`. Needed to open a stack at all. |
 | 38 | 13 | Resource Manager | `GetResInfo`, `OpenRFPerm`, `Count1Resources`. |
 | 35 | 1 | Script Manager | `ScriptUtil` alone. A wrong stub is worse than none: it is a selector-dispatched call, so it needs the selectors decoded before it returns anything. |
 | 34 | 8 | Menu Manager | `SetMenuItemText`, `GetMenuHandle`, `MenuSelect`. |

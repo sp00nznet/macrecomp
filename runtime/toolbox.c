@@ -184,6 +184,20 @@ static void lowmem_init(void){
 static int g_inited = 0;
 uint32_t mr_alloc(uint32_t n){ return heap_alloc(n); }
 
+/* GetAppParms reports the application's own name. MRAPP names it; a title that
+ * looks at it mostly wants something non-empty.
+ *
+ * Not built: the Finder startup handshake (an AppParmHandle block that
+ * CountAppFiles/GetAppFiles walk to learn which document to open). It was
+ * written and then removed unused -- HyperCard 1.2.2 never calls GetAppParms,
+ * so it was 40 lines answering a question nothing asked. Add it when a title
+ * actually calls CountAppFiles; the block is message(2), count(2), then per
+ * file vRefNum(2), type(4), versNum(2), Str255 padded even (IM II-57). */
+static const char *app_name(void){
+    const char *e = getenv("MRAPP");
+    return (e && *e) ? e : "Application";
+}
+
 void toolbox_init(void){ qd_init(); heap_init(); lowmem_init(); g_inited=1; }
 
 /* ---- PICT v1 decode + blit (DrawPicture) ---- */
@@ -473,20 +487,31 @@ void m68k_trap(uint16_t raw){
         ret16((uint16_t)hit);
     } break;
     case 0xA895: /*ShutDown*/ M.d[0]=0; break;   /* selector-dispatched; nothing to do */
-    case 0xA9F5: /*GetAppParms*/ { uint32_t ap=pop32(),rn=pop32(),nm=pop32();
-        if(nm)m68k_w8(nm,0); if(rn)m68k_w16(rn,0); if(ap)m68k_w32(ap,0); } break;
-    case 0xA000: /*Open*/ case 0xA00A: /*OpenRF*/ { uint32_t pb=M.a[0], np=m68k_r32(pb+18);
-        if(getenv("MRFILE")){ char nm[64]={0}; int len=np?m68k_r8(np):0;
-            for(int i=0;i<len&&i<63;i++) nm[i]=(char)m68k_r8(np+1+i);
-            fprintf(stderr,"[File] Open%s '%s'\n", w==0xA00A?"RF":"", nm); }
-        M.d[0]=(uint32_t)(-43); m68k_w16(pb+16,(uint16_t)(-43)); } break; /* fnfErr: no such file */
-    case 0xA002: /*Read*/ { uint32_t pb=M.a[0]; uint32_t req=m68k_r32(pb+36);
-        if(getenv("MRFILE")) fprintf(stderr,"[File] Read req=%u buf=%x\n",req,m68k_r32(pb+32));
-        m68k_w32(pb+40, 0);                  /* ioActCount = 0 */ M.d[0]=-39; } break; /* eofErr */
-    case 0xA003: /*Write*/ case 0xA001: /*Close*/
-    case 0xA044: /*SetFPos*/ case 0xA018: /*GetFPos*/ case 0xA013: /*FlushVol*/
-    case 0xA008: /*Create*/ case 0xA009: /*Delete*/ case 0xA00C: /*GetFileInfo*/
-        M.d[0]=0; break;                     /* register-based File Mgr: pretend OK */
+    case 0xA9F5: /*GetAppParms(VAR apName; VAR apRefNum; VAR apParam)*/ {
+        uint32_t ap=pop32(), rn=pop32(), nm=pop32();
+        if(nm){ const char *n=app_name(); int l=(int)strlen(n); if(l>31)l=31;
+                m68k_w8(nm,(uint8_t)l);
+                for(int i=0;i<l;i++) m68k_w8(nm+1+i,(uint8_t)n[i]); }
+        if(rn) m68k_w16(rn,1);                  /* the app's own resource file */
+        if(ap) m68k_w32(ap, 0);                 /* no Finder startup document */
+    } break;
+    /* ---- File Manager (files.c) ----
+     * Register-based: A0 is the parameter block, D0 the result. Handled in
+     * their own module because a title's documents are served from its media,
+     * not from the resource fork this file already owns. */
+    case 0xA000: case 0xA200: /*Open / HOpen*/
+    case 0xA00A: case 0xA20A: /*OpenRF / HOpenRF*/
+    case 0xA002: /*Read*/     case 0xA001: /*Close*/
+    case 0xA003: /*Write*/    case 0xA011: /*GetEOF*/   case 0xA012: /*SetEOF*/
+    case 0xA018: /*GetFPos*/  case 0xA044: /*SetFPos*/
+    case 0xA00C: case 0xA20C: /*GetFileInfo / HGetFileInfo*/
+    case 0xA00D: /*SetFileInfo*/ case 0xA008: /*Create*/ case 0xA009: /*Delete*/
+    case 0xA010: /*Allocate*/ case 0xA013: /*FlushVol*/ case 0xA014: /*GetVol*/
+    case 0xA015: /*SetVol*/   case 0xA017: /*Eject*/    case 0xA035: /*OffLine*/
+        if(!fs_trap(w)) M.d[0]=(uint32_t)(-43);
+        break;
+    case 0xA060: case 0xA260: /*FSDispatch / HFSDispatch*/
+        fs_dispatch(w); break;
 
     /* ---- Resource Manager (serve the app's own resources) ---- */
     case 0xA9A0: /*GetResource*/ case 0xA81F: /*Get1Resource*/ {

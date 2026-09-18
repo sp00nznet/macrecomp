@@ -303,6 +303,80 @@ static void test_textedit(void){
     push32(up); push32(hTE); TRAP(0xA9D3);
 }
 
+
+/* File Manager. Register a real file on the host, then drive the traps the way
+ * lifted code does -- A0 is the parameter block, D0 the result -- and check
+ * both the bytes that come back and the error a missing file must report. */
+#define PB_IORESULT    16
+#define PB_IONAMEPTR   18
+#define PB_IOREFNUM    24
+#define PB_IOMISC      28
+#define PB_IOBUFFER    32
+#define PB_IOREQCOUNT  36
+#define PB_IOACTCOUNT  40
+#define PB_IOPOSMODE   44
+#define PB_IOPOSOFFSET 46
+
+static uint32_t fs_pb(const char *name){
+    uint32_t pb = alloc(80);
+    for(int i=0;i<80;i++) m68k_w8(pb+i,0);
+    m68k_w32(pb+PB_IONAMEPTR, pstr(name));
+    return pb;
+}
+static int fs_call(uint16_t trap, uint32_t pb){
+    M.a[0]=pb; TRAP(trap); return (int16_t)(M.d[0]&0xFFFF);
+}
+static void test_files(void){
+    printf("File Manager\n");
+    const char *path = "hal_fs_test.tmp";
+    FILE *f = fopen(path,"wb");
+    CHECK(f!=NULL, "could not create the test file");
+    if(!f) return;
+    fwrite("ABCDEFGHIJ",1,10,f); fclose(f);
+    fs_add("Scratch","TEXT","MACA", path, 10, "", 0);
+
+    /* a file that is not there reports fnfErr, not silence */
+    uint32_t pb = fs_pb("Nothing");
+    CHECK(fs_call(0xA000,pb)==-43, "a missing file should be fnfErr, got %d",
+          (int16_t)(M.d[0]&0xFFFF));
+
+    pb = fs_pb("Scratch");
+    CHECK(fs_call(0xA000,pb)==0, "Open should succeed");
+    int ref = (int16_t)m68k_r16(pb+PB_IOREFNUM);
+    CHECK(ref>0, "Open should hand back a refNum, got %d", ref);
+
+    /* GetEOF reports the fork length */
+    CHECK(fs_call(0xA011,pb)==0, "GetEOF should succeed");
+    CHECK((int)m68k_r32(pb+PB_IOMISC)==10, "GetEOF should say 10, got %u",
+          m68k_r32(pb+PB_IOMISC));
+
+    /* a short read from the mark, then the mark has moved */
+    uint32_t buf = alloc(32);
+    m68k_w32(pb+PB_IOBUFFER, buf);
+    m68k_w32(pb+PB_IOREQCOUNT, 4);
+    m68k_w16(pb+PB_IOPOSMODE, 0);
+    CHECK(fs_call(0xA002,pb)==0, "Read of 4 bytes should succeed");
+    CHECK(m68k_r32(pb+PB_IOACTCOUNT)==4, "should have read 4");
+    CHECK(m68k_r8(buf)=='A' && m68k_r8(buf+3)=='D', "should have read ABCD");
+    CHECK(fs_call(0xA018,pb)==0 && m68k_r32(pb+PB_IOPOSOFFSET)==4,
+          "the mark should be at 4, got %u", m68k_r32(pb+PB_IOPOSOFFSET));
+
+    /* seek absolute, then read across the end: short count and eofErr */
+    m68k_w16(pb+PB_IOPOSMODE,1); m68k_w32(pb+PB_IOPOSOFFSET,8);
+    CHECK(fs_call(0xA044,pb)==0, "SetFPos to 8 should succeed");
+    m68k_w32(pb+PB_IOREQCOUNT, 8); m68k_w16(pb+PB_IOPOSMODE,0);
+    CHECK(fs_call(0xA002,pb)==-39, "a read past the end should report eofErr");
+    CHECK(m68k_r32(pb+PB_IOACTCOUNT)==2, "...but still deliver 2 bytes, got %u",
+          m68k_r32(pb+PB_IOACTCOUNT));
+    CHECK(m68k_r8(buf)=='I' && m68k_r8(buf+1)=='J', "the last two bytes are IJ");
+
+    /* the media is read-only, and says so rather than pretending */
+    CHECK(fs_call(0xA003,pb)==-61, "Write should report wrPermErr");
+    CHECK(fs_call(0xA001,pb)==0, "Close should succeed");
+    CHECK(fs_call(0xA002,pb)==-51, "a read after Close should report rfNumErr");
+    remove(path);
+}
+
 int main(void){
     M.memsize = 8u*1024*1024; M.mem = calloc(1,M.memsize);
     SP = 0x100000;
@@ -313,6 +387,7 @@ int main(void){
     test_dialog();
     test_memory();
     test_textedit();
+    test_files();
     draw_scene();
 
     if(g_fail){ printf("HAL selftest: %d check(s) FAILED\n", g_fail); return 1; }

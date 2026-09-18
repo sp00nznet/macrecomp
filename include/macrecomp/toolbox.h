@@ -94,6 +94,14 @@ int  plat_next_event(int *what, int *msg, int *modh, int *modv);
 /* ---- allocation out of the guest heap (toolbox.c owns the bump heap) ---- */
 uint32_t mr_alloc(uint32_t n);   /* 0 if the heap cannot satisfy it */
 
+/* ---- File Manager (files.c). Register the files a title's media holds, then
+ * the register-based File Manager traps serve them read-only. Forks are read
+ * from the host on demand, so a CD-ROM's hundreds of megabytes stay on disk. */
+void fs_add(const char *name, const char *type, const char *creator,
+            const char *dpath, uint32_t dlen, const char *rpath, uint32_t rlen);
+int  fs_trap(uint16_t w);        /* 1 if this trap was a File Manager call */
+int  fs_dispatch(uint16_t w);    /* FSDispatch / HFSDispatch (selector in D0) */
+
 /* ---- TextEdit (textedit.c). The TERec lives in guest memory; a TEHandle
  * dereferences to it, so the guest reads teLength/selStart/hText directly. ---- */
 uint32_t te_new(uint32_t destPtr, uint32_t viewPtr);   /* -> TEHandle */

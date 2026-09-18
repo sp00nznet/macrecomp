@@ -8,6 +8,28 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **File Manager (`runtime/files.c`)** - a title's own media, served read-only:
+  `Open`/`OpenRF`, `Read`, `Close`, `GetEOF`, `Get`/`SetFPos`, `GetFileInfo`,
+  `GetVol`/`SetVol`, and the `FSDispatch`/`HFSDispatch` selectors worth
+  answering. **OS traps**, so A0 is the parameter block and D0 the result;
+  nothing is read off the Pascal stack. Forks are read from the host on demand -
+  one CD-ROM's forks are 422 MB, and a stack is read a few hundred bytes at a
+  time. Writes report `wrPermErr` rather than succeeding silently: a title told
+  it cannot write can say so, one told "fine" loses data. 79% -> **80%** of call
+  sites. Checked in `hal_selftest` down to the awkward cases - a read across the
+  end delivers a short count *and* `eofErr`, and a read after `Close` is
+  `rfNumErr`.
+- **`extract_resources.py --forks DIR`** - every file's data and resource forks
+  plus a `files.json` index. Extracting one application's resources is not
+  enough to serve a File Manager; it needs both forks of every file.
+
+### Removed
+
+- The Finder startup handshake, written and then taken out unused. HyperCard
+  1.2.2 never calls `GetAppParms`, so an `AppParmHandle` block for
+  `CountAppFiles` to walk was forty lines answering a question nothing asked.
+  The layout survives as a comment for whenever a title does ask.
+
 - **HyperCard renders.** 306 -> **372 Toolbox calls**, and the framebuffer is no
   longer blank: it draws its own modal dialog frame, drop shadow and all,
   through the QuickDraw HAL. Screenshot in the README. The box is empty because

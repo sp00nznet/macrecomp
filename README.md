@@ -83,6 +83,7 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
 | `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); every instruction is an entry point, so computed jumps into a function resolve; rejects function starts that are provably not code | ✅ **97–100% instruction coverage** |
 | `conformance.py` | extract → scan → coverage over the corpus; one row per title, fails on a drop below baseline | ✅ in CI |
+| `extract_resources.py --forks` | every file's data + resource forks, plus `files.json` — what the File Manager HAL serves | ✅ |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
 | runtime `quickdraw.c` + `platform_sdl.c`: 1-bit framebuffer + pen/rect/line/oval/text/CopyBits → SDL2 window | the video HAL | ✅ core (self-tested) |
 | runtime `toolbox.c`: A-trap dispatch, Resource Mgr (serves the app's resources), QuickDraw incl. **CopyBits + DrawPicture + regions**, Window/Menu/File stubs, Memory Mgr heap | the OS HAL | 🟢 ~190 traps; boots real games |
@@ -99,7 +100,7 @@ cost of a title is a number before any of it is lifted:
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered |
 |---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** |
-| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **79%** |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **80%** |
 
 ```bash
 python tools/scan_traps.py work/unpacked --coverage runtime/toolbox.c
