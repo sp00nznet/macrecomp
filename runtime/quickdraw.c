@@ -18,10 +18,22 @@ static Rect clip = { 0, 0, QD_H, QD_W };
 /* current drawing target: the screen (qd_fb) or a 1-bit BitMap in guest memory.
  * The game double-buffers -- SetPortBits to an offscreen buffer, draw, then
  * CopyBits it to the screen. */
-static struct { int is_screen; uint32_t base; int rowbytes, bl, bt; }
-    cur = { 1, 0, 0, 0, 0 };
-void qd_set_port(int is_screen, uint32_t base, int rowbytes, int bl, int bt){
-    cur.is_screen=is_screen; cur.base=base; cur.rowbytes=rowbytes; cur.bl=bl; cur.bt=bt;
+static struct { int is_screen; uint32_t base; int rowbytes, bl, bt, br, bb; }
+    cur = { 1, 0, 0, 0, 0, 0, 0 };
+void qd_set_port(int is_screen, uint32_t base, int rowbytes,
+                 int bl, int bt, int br, int bb){
+    cur.is_screen=is_screen; cur.base=base; cur.rowbytes=rowbytes;
+    cur.bl=bl; cur.bt=bt; cur.br=br; cur.bb=bb;
+}
+/* An offscreen buffer has an end, and a draw that runs past it lands in the
+ * heap -- m68k_w8 keeps it inside guest memory, so nothing crashes and whatever
+ * was allocated next is quietly rewritten instead. rowBytes fixes the row width
+ * exactly, so it is the guard to trust; the bounds give the height. */
+static int off_ok(int lx, int ly){
+    if (lx < 0 || ly < 0 || cur.rowbytes <= 0) return 0;
+    if ((lx >> 3) >= cur.rowbytes) return 0;
+    if (cur.bb > cur.bt && ly >= cur.bb - cur.bt) return 0;
+    return 1;
 }
 
 static void put(int h, int v, int black){
@@ -31,7 +43,7 @@ static void put(int h, int v, int black){
         qd_fb[v][h] = (uint8_t)black;
     } else {                          /* packed 1-bit bitmap in M.mem (1 = black) */
         int lx = h - cur.bl, ly = v - cur.bt;
-        if (lx < 0 || ly < 0 || cur.rowbytes <= 0) return;
+        if (!off_ok(lx, ly)) return;
         uint32_t a = cur.base + (uint32_t)ly * cur.rowbytes + (lx >> 3);
         uint8_t byte = (uint8_t)m68k_r8(a), mask = 0x80u >> (lx & 7);
         m68k_w8(a, black ? (byte | mask) : (byte & (uint8_t)~mask));
@@ -43,7 +55,7 @@ static int getpix(int h, int v){
         return qd_fb[v][h];
     }
     int lx = h - cur.bl, ly = v - cur.bt;
-    if (lx < 0 || ly < 0 || cur.rowbytes <= 0) return 0;
+    if (!off_ok(lx, ly)) return 0;
     return (m68k_r8(cur.base + (uint32_t)ly*cur.rowbytes + (lx>>3)) >> (7-(lx&7))) & 1;
 }
 

@@ -232,6 +232,24 @@ void m68k_call(uint32_t addr) {
         fprintf(stderr, "[brk %06x] args:", addr);
         for (int i = 0; i < 8; i++) fprintf(stderr, " %08x", m68k_r32(SP + 4u*i));
         fprintf(stderr, "\n");
+        /* An argument that points at text is usually the interesting one: print
+         * it, and one level of indirection too, since a handle looks the same. */
+        for (int i = 0; i < 8; i++) {
+            uint32_t v = m68k_r32(SP + 4u*i);
+            for (int deref = 0; deref < 2; deref++) {
+                if (deref) { if (v < 64 || v + 4 >= M.memsize) break; v = m68k_r32(v); }
+                if (v < 64 || v + 48 >= M.memsize) continue;
+                int ok = 0;
+                for (int k = 0; k < 40; k++) { uint8_t c = M.mem[v+k];
+                    if ((c >= 0x20 && c < 0x7f) || c == 0x0D || c == 0x09) ok++; }
+                if (ok < 16) continue;
+                fprintf(stderr, "[brk] arg%d%s -> %06x: \"", i, deref ? "*" : "", v);
+                for (int k = 0; k < 48; k++) { uint8_t c = M.mem[v+k];
+                    fputc(c == 0x0D ? '|' : (c >= 0x20 && c < 0x7f ? c : '.'), stderr); }
+                fprintf(stderr, "\"\n");
+            }
+        }
+        fprintf(stderr, "\n");
     }
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);

@@ -47,6 +47,13 @@ All notable changes to this project are documented here. Format follows
   an unknown handle copies what the caller asked for -- safe, because this heap
   never reuses a block. A wiped handle is indistinguishable further on from data
   that was garbage all along, which is the worst kind of bug to chase.
+- **An offscreen draw could run off the end of its buffer and into the heap.**
+  `qd_set_port` took the BitMap's `bounds.top` and `.left` and dropped `.bottom`
+  and `.right`, so the plot path checked only that the local coordinates were
+  non-negative. `m68k_w8` keeps a stray write inside guest memory, so nothing
+  crashed -- whatever had been allocated after the buffer was quietly rewritten
+  instead. `rowBytes` fixes the row width exactly and now bounds x; the bounds
+  rect bounds y.
 - `MRSHOT` no longer overwrites the one frame worth keeping with the blank one a
   title leaves behind on the way out.
 

@@ -50,7 +50,8 @@ void qd_set_clip(const Rect *r);
 void qd_get_clip(Rect *r);
 /* set the current drawing target: the screen (is_screen=1) or a 1-bit BitMap in
  * guest memory (base/rowbytes and the bitmap bounds' left/top origin) */
-void qd_set_port(int is_screen, uint32_t base, int rowbytes, int bl, int bt);
+void qd_set_port(int is_screen, uint32_t base, int rowbytes,
+                 int bl, int bt, int br, int bb);
 
 /* rect utilities */
 void rect_set(Rect *r, int l, int t, int rt, int b);

@@ -36,8 +36,9 @@ static void bitmap_screen(uint32_t bm){ m68k_w32(bm,SCREEN_TAG); m68k_w16(bm+4,Q
     Rect s={0,0,QD_H,QD_W}; wr_rect(bm+6,&s); }
 static void set_target_from_bitmap(uint32_t bm){
     uint32_t base=m68k_r32(bm); int rb=(int)(m68k_r16(bm+4)&0x3FFF);
-    int bt=(int16_t)m68k_r16(bm+6), bl=(int16_t)m68k_r16(bm+8);
-    qd_set_port(base==SCREEN_TAG || base==0, base, rb, bl, bt);
+    int bt=(int16_t)m68k_r16(bm+6),  bl=(int16_t)m68k_r16(bm+8);
+    int bb=(int16_t)m68k_r16(bm+10), br=(int16_t)m68k_r16(bm+12);
+    qd_set_port(base==SCREEN_TAG || base==0, base, rb, bl, bt, br, bb);
 }
 
 /* ---- bump heap inside M.mem (NewPtr/NewHandle) ---- */
@@ -486,7 +487,7 @@ void m68k_trap(uint16_t raw){
     case 0xA852: /*HideCursor*/ case 0xA853: /*ShowCursor*/ case 0xA856: /*ObscureCursor*/
     case 0xA9B4: /*SystemTask*/ break;
     case 0xA86F: /*OpenPort*/ { uint32_t p=pop32(); if(p){ bitmap_screen(p+2);
-        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,SCREEN_TAG,QD_W/8,0,0);} } break;
+        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,SCREEN_TAG,QD_W/8,0,0,QD_W,QD_H);} } break;
     case 0xA875: /*SetPortBits*/ { uint32_t bm=pop32(); if(bm) set_target_from_bitmap(bm);
         if(getenv("MRGFX")&&bm) fprintf(stderr,"[gfx] SetPortBits base=%x rb=%d\n",m68k_r32(bm),m68k_r16(bm+4)&0x3fff); } break;
     case 0xA9B8: /*GetPattern*/ { (void)pop16(); uint32_t h=heap_alloc(4),p=heap_alloc(8);
@@ -1064,6 +1065,9 @@ void m68k_trap(uint16_t raw){
     case 0xA024: /*SetHandleSize*/ { uint32_t h=M.a[0], want=M.d[0];
         if(!h){ M.d[0]=(uint32_t)-109; break; }
         int known=hsz_known(h); uint32_t have=hsz_get(h);
+        if(getenv("MRHEAP")) fprintf(stderr,
+            "  SetHandleSize h=%06x *h=%06x %s%u -> %u\n",
+            h, m68k_r32(h), known?"":"(unknown)", have, want);
         if(known && want<=have){ hsz_set(h,want); M.d[0]=0; break; }
         uint32_t np=heap_alloc(want);
         if(!np){ M.d[0]=(uint32_t)-108; break; }
