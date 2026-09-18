@@ -13,8 +13,6 @@
 /* ---- Pascal stack helpers ---- */
 static uint16_t pop16(void){ uint16_t v=(uint16_t)m68k_r16(SP); SP+=2; return v; }
 static uint32_t pop32(void){ uint32_t v=m68k_r32(SP); SP+=4; return v; }
-static void push16(uint16_t v){ SP-=2; m68k_w16(SP,v); }
-static void push32(uint32_t v){ SP-=4; m68k_w32(SP,v); }
 /* Pascal function results. The caller reserved the result slot *below* the
  * arguments, so once every argument is popped SP points straight at it.
  * Write there -- pushing would leave SP two bytes short and put the result
@@ -203,7 +201,12 @@ static void draw_pict(uint32_t pic, Rect dst){
             int dw=dst.right-dst.left, dh=dst.bottom-dst.top;
             if(dw<=0)dw=w; if(dh<=0)dh=h;
             for(int y=0;y<h;y++){
-                if(op==0x98){ int ln = rowbytes>250 ? (int)m68k_r16(o) : m68k_r8(o); o += rowbytes>250?2:1;
+                /* The row header holds the packed byte count. unpackbits_row
+                 * stops on output length instead and returns the new offset,
+                 * so the count is skipped, not read.
+                 * ponytail: trusting the output length; bound the row by the
+                 * header count if a malformed PICT ever over-reads. */
+                if(op==0x98){ o += rowbytes>250?2:1;
                               uint32_t np=unpackbits_row(o,row,rowbytes); o=np; }
                 else { for(int i=0;i<rowbytes;i++) row[i]=(uint8_t)m68k_r8(o+i); o+=rowbytes; }
                 int py=dst.top + y*dh/h;

@@ -1,0 +1,40 @@
+{
+  "titles": [
+    {
+      "name": "HyperCard 1.2.2",
+      "image": "wec.iso",
+      "file": "HyperCard",
+      "source": "The Electronic Whole Earth Catalog CD-ROM (Broderbund, 1988), converted from BIN/CUE",
+      "note": "The 1988 build: oldest and simplest. A partitioned Mac CD, so it exercises the partition-map path in load_hfs.",
+      "baseline": {
+        "sites_covered": 2452,
+        "sites_total": 3166,
+        "distinct_covered": 199,
+        "distinct_total": 418
+      }
+    },
+    {
+      "name": "HyperCard 2.4.1",
+      "image": "HyperCardBootSystem6.img",
+      "file": "HyperCard",
+      "source": "archive.org/details/HyperCardBootSystem6",
+      "note": "System 6.0.8 boot disk; smallest complete fixture, the CI default if a corpus is present.",
+      "baseline": null
+    },
+    {
+      "name": "HyperCard 2.4",
+      "image": "HyperCardBootSystem7.img",
+      "file": "HyperCard",
+      "source": "archive.org/details/HyperCardBootSystem7",
+      "note": "System 7.0.1; the second HyperCard generation.",
+      "baseline": null
+    },
+    {
+      "name": "Shufflepuck Cafe",
+      "image": "shufflepuck.dc42",
+      "source": "user-supplied 800K floppy image (Broderbund, 1988)",
+      "note": "Protected: unprotect.py must run first, so the harness measures the shipped segments and reports what it sees.",
+      "baseline": null
+    }
+  ]
+}

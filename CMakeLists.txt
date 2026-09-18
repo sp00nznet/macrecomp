@@ -41,4 +41,13 @@ if(MACRECOMP_EXAMPLES)
     if(NOT MSVC)
         target_link_libraries(hal_selftest m)
     endif()
+
+    # No HAL and no display: just the function table and its dispatch.
+    add_executable(entry_dispatch_test examples/entry_dispatch_test.c runtime/m68k.c)
+    target_compile_definitions(entry_dispatch_test PRIVATE MACRECOMP_NO_TRAP_STUB)
+    target_include_directories(entry_dispatch_test PRIVATE include)
+
+    enable_testing()
+    add_test(NAME hal_selftest COMMAND hal_selftest)
+    add_test(NAME entry_dispatch COMMAND entry_dispatch_test)
 endif()

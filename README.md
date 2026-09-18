@@ -81,7 +81,8 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `unprotect.py` | statically unpack self-decrypting/protected CODE | ✅ **fully solved** (jump table + segment bodies, byte-exact) |
 | `relocs.py` | read THINK C far-model `CREL`/`DREL` relocations; mark which longwords in a segment are data addresses | 🟢 CREL confirmed against string starts; DREL in-range only |
 | `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
-| `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); rejects function starts that are provably not code | ✅ **97–100% instruction coverage** |
+| `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); every instruction is an entry point, so computed jumps into a function resolve; rejects function starts that are provably not code | ✅ **97–100% instruction coverage** |
+| `conformance.py` | extract → scan → coverage over the corpus; one row per title, fails on a drop below baseline | ✅ in CI |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
 | runtime `quickdraw.c` + `platform_sdl.c`: 1-bit framebuffer + pen/rect/line/oval/text/CopyBits → SDL2 window | the video HAL | ✅ core (self-tested) |
 | runtime `toolbox.c`: A-trap dispatch, Resource Mgr (serves the app's resources), QuickDraw incl. **CopyBits + DrawPicture + regions**, Window/Menu/File stubs, Memory Mgr heap | the OS HAL | 🟢 ~190 traps; boots real games |
@@ -98,10 +99,19 @@ cost of a title is a number before any of it is lifted:
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered |
 |---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** |
-| HyperCard 1.x | 326 KB | 22 | 418 | 3166 | **76%** |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **77%** |
 
 ```bash
 python tools/scan_traps.py work/unpacked --coverage runtime/toolbox.c
+```
+
+`tools/conformance.py` runs that measurement over the whole corpus in CI and
+fails the build if a title's covered-site count drops below its recorded
+baseline. Corpus images are copyrighted Mac media and live outside the repo, so
+a missing title reports `SKIP` rather than passing quietly:
+
+```bash
+MACRECOMP_CORPUS=/path/to/images python tools/conformance.py
 ```
 
 First customer: [**shufflepuck-cafe**](https://github.com/sp00nznet/shufflepuck-cafe)
@@ -115,11 +125,17 @@ InitDialogs), then its own resources.
 It does **not** currently render. An earlier build drew HyperCard's own error
 dialog -- from its real `ALRT`/`DITL` resources, with legible text -- which was
 how the ROM-version check and the Dialog Manager got verified. Fixing the lifter
-bugs behind that check moved execution past the error path, and it now stops
-earlier, before anything is drawn, on an indirect jump into the middle of a
-function. The function table can only enter a function at its first instruction,
-so that address does not resolve. [ROADMAP.md](ROADMAP.md) has the diagnosis and
-the fix (entry-point dispatch).
+bugs behind that check moved execution past the error path, and it then stopped
+earlier, before anything was drawn, on an indirect jump into the middle of a
+function.
+
+**That jump now resolves.** Lifted functions take an entry address and label
+every instruction, and the runtime can find the function whose body covers an
+address rather than only the one that starts at it — so a computed jump lands
+where the original code meant it to. Whether HyperCard renders past that point
+is not yet measured: it needs a generated title tree, which is the user's and is
+never committed. [ROADMAP.md](ROADMAP.md) has the mechanism and what is still
+stubbed (`FSDispatch`, SANE).
 
 Next target: **HyperCard** itself. It is one 68k `APPL`, and recompiling it makes
 every HyperCard stack a target at once rather than one title at a time — which

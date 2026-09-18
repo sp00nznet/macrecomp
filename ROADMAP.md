@@ -31,22 +31,44 @@ It does not currently render. It reaches the same depth it did when it was
 drawing an error dialog, but no longer takes the error path -- so nothing is
 drawn at all. The dialog was the only thing it ever displayed.
 
-The remaining blocker is an **indirect jump to a mid-function address**.
+### Entry-point dispatch (landed)
 
-`m68k_jump: no function at 5210bc` repeats forever. That is segment 16 offset
-`0x10bc`, which sits *inside* `fn_16_0fea` -- a function that disassembles
-cleanly from its real start (`link.w a6,#$fff4` / `movem.l d3-d7/a2-a4,-(a7)`,
-through to `unlk`/`rts`). Nothing in the generated code jumps there literally, so
-it is a register-indirect `jmp` whose target is computed at run time.
+The blocker was an **indirect jump to a mid-function address**.
+`m68k_jump: no function at 5210bc` repeated forever: segment 16 offset `0x10bc`,
+sitting *inside* `fn_16_0fea`. Nothing in the generated code jumps there
+literally, so it is a register-indirect `jmp` whose target is computed at run
+time, and a table of *function starts* cannot enter a function partway.
 
-The function table maps *function starts* to C functions, so it cannot enter a
-function partway. That is the structural limit reached here. The fix is
-**entry-point dispatch**: the lifter already emits an `L<addr>:` label for every
-branch target, so each lifted function can take a prologue that jumps to a label
-by address, and `m68k_jump` can resolve any address inside a known function
-rather than only its first instruction.
+Two things had to change, and the second is the one that mattered:
 
-Two things worth knowing before touching the boundary code again:
+- **The runtime** keeps a second, range-based view of the function table.
+  `m68k_register` now takes `[start, end)`, and a lookup that misses the hash
+  falls back to a binary search for the function whose body covers the address.
+- **The lifter** labels **every instruction**, not just branch targets, and
+  gives each function a prologue that switches on an entry address and `goto`s
+  the matching label. Labelling only branch targets would not have worked here:
+  `0x10bc` is not a branch target anywhere in the binary, which is exactly why
+  the plain disassembly never revealed it.
+
+`0x10bc` now lifts to `case 0x10bcu: goto L10bc;` in `fn_16_0fea`, so the
+transfer resolves. All 21 segments still lift and compile.
+
+**What that does not yet establish:** whether HyperCard renders once it gets
+past this point. Running it needs a generated title tree, which is the user's
+and is never committed (house rules, section 3), so the next measurement is a
+run -- not a claim that can be made from here. `FSDispatch` and `FP68K` (SANE)
+are still stubs, and HyperCard cannot open its Home stack without the File
+Manager, so a rendered card is unlikely to be the very next thing that happens.
+
+Entry dispatch is covered by `examples/entry_dispatch_test.c` (`ctest`), which
+checks entry at a start, at two interior boundaries, into the second of two
+adjacent functions, through `m68k_call` with the stack balanced across it, and
+the two failure modes: an interior address that is not an instruction boundary,
+and an address no function owns.
+
+Two things worth knowing before touching the boundary code again -- both still
+true, because entry dispatch resolves *where a jump lands*, not *what the sweep
+believes is code*:
 
 - **The linear sweep in `main()` drifts.** It disassembles each segment once
   from offset 0, so any embedded data knocks it out of alignment and everything
@@ -91,13 +113,27 @@ segments, not traps. See the unclassified line in the report.
 
 ## Conformance harness
 
-Required by house rules and not yet built. The measurement already exists —
-`--coverage` prints a sites/traps figure per title — so the harness is the loop
-around it:
+`tools/conformance.py`, run in CI on every push. It loops extract → scan →
+coverage over the corpus and prints one row per title:
 
-- Run extract → scan → coverage over a fixed corpus, one row per title.
-- Fail on regression in covered-sites count, not merely on zero.
-- Surface the current figures in this file's table.
+```bash
+MACRECOMP_CORPUS=/path/to/images python tools/conformance.py
+```
+
+```
+=== macrecomp conformance (1 measured, 3 skipped) ===
+  ok   HyperCard 1.2.2   2452/3166 sites (77%)
+  SKIP HyperCard 2.4.1   HyperCardBootSystem6.img not in corpus dir
+```
+
+The tracked number is **covered call sites**, and a title that drops below its
+recorded baseline fails the run — so a HAL change that quietly breaks a title
+that used to work is caught here. Baselines live in `tools/corpus.json`;
+`--update` rewrites them from the current run, and a gain is reported as `GAIN`
+rather than silently accepted, so the baseline moves deliberately.
+
+A title whose image is absent is `SKIP`, never a silent pass and never a
+failure, so CI without a corpus still exercises the whole harness.
 
 ### Corpus
 

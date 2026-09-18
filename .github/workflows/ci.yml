@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev
+
+      - name: Build
+        run: |
+          # -Wno-misleading-indentation: the runtime's house style puts short
+          # guarded statements on one line (if(h)*h=..; if(v)*v=..;). That is
+          # deliberate, so the warning is noise here; every other warning is an
+          # error.
+          cmake -B build -DMACRECOMP_EXAMPLES=ON             -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-misleading-indentation"
+          cmake --build build -j
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tool dependencies
+        run: pip install -r tools/requirements.txt
+
+      - name: Self-checks
+        run: |
+          python tools/test_scan_traps.py
+          python tools/test_extract_resources.py
+
+      # The corpus is copyrighted Mac media and cannot live in the repo, so this
+      # reports SKIP for every title here. It still runs: a harness that only
+      # works on one machine is a harness that breaks unnoticed.
+      - name: Conformance
+        run: python tools/conformance.py

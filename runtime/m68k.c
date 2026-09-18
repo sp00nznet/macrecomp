@@ -8,17 +8,32 @@
 
 M68K M;
 
-/* ---- function table: open-addressing hash of 24-bit code address -> fn ---- */
+/* ---- function table: open-addressing hash of 24-bit code address -> fn ----
+ *
+ * The hash answers "is this a function start", which is what a jsr/bsr to a
+ * known routine needs and is the common case. It cannot answer "which function
+ * contains this address", and the original code reaches computed mid-function
+ * addresses through a register. So registration also fills a parallel array of
+ * [start,end) ranges, kept sorted and searched only when the hash misses. */
 #define FT_CAP 16384
 static struct { uint32_t addr; m68k_fn fn; } ft[FT_CAP];
 
-void m68k_register(uint32_t addr, m68k_fn fn) {
+typedef struct { uint32_t start, end; m68k_fn fn; } Range;
+static Range rng[FT_CAP];
+static int n_rng = 0, rng_sorted = 0;
+
+void m68k_register(uint32_t addr, uint32_t end, m68k_fn fn) {
     uint32_t h = (addr * 2654435761u) % FT_CAP;
     for (uint32_t i = 0; i < FT_CAP; i++) {
         uint32_t j = (h + i) % FT_CAP;
-        if (ft[j].fn == 0 || ft[j].addr == addr) { ft[j].addr = addr; ft[j].fn = fn; return; }
+        if (ft[j].fn == 0 || ft[j].addr == addr) { ft[j].addr = addr; ft[j].fn = fn; goto ranged; }
     }
     fprintf(stderr, "m68k: function table full\n"); exit(1);
+ranged:
+    if (end <= addr) return;                   /* extent unknown: start-only entry */
+    if (n_rng >= FT_CAP) { fprintf(stderr, "m68k: range table full\n"); exit(1); }
+    rng[n_rng].start = addr; rng[n_rng].end = end; rng[n_rng].fn = fn;
+    n_rng++; rng_sorted = 0;
 }
 
 static m68k_fn ft_lookup(uint32_t addr) {
@@ -29,6 +44,34 @@ static m68k_fn ft_lookup(uint32_t addr) {
         if (ft[j].addr == addr) return ft[j].fn;
     }
     return 0;
+}
+
+static int rng_order(const void *a, const void *b) {
+    uint32_t x = ((const Range *)a)->start, y = ((const Range *)b)->start;
+    return x < y ? -1 : x > y;
+}
+static int rng_probe(const void *key, const void *elem) {
+    uint32_t a = *(const uint32_t *)key; const Range *r = elem;
+    return a < r->start ? -1 : (a >= r->end ? 1 : 0);
+}
+
+/* The function whose body covers addr, or 0. Segments load at distinct bases
+ * and a segment's functions partition it, so the ranges do not overlap and a
+ * binary search over them is well defined. Sorting is deferred to the first
+ * interior lookup: registration order is link order, not address order, and a
+ * title that never jumps into a function never pays for it. */
+static m68k_fn ft_containing(uint32_t addr) {
+    if (!n_rng) return 0;
+    if (!rng_sorted) { qsort(rng, n_rng, sizeof rng[0], rng_order); rng_sorted = 1; }
+    const Range *r = bsearch(&addr, rng, n_rng, sizeof rng[0], rng_probe);
+    return r ? r->fn : 0;
+}
+
+/* Reported by a lifted prologue handed an address inside its own body that is
+ * not an instruction boundary: either data being executed, or a decode that
+ * drifted. Distinct from "no function at", which means no owner at all. */
+void m68k_entry_miss(uint32_t entry) {
+    fprintf(stderr, "m68k: %06x is inside a function but not an instruction boundary\n", entry);
 }
 
 /* low-memory Ticks (0x16A): the system bumps it 60/sec; games busy-wait on it.
@@ -49,14 +92,17 @@ volatile uint32_t g_shadow[512]; volatile int g_shadow_sp = 0;   /* shadow call 
 
 void m68k_call(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
+    uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);
+    if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x\n", addr); return; }
     if (addr != g_last_call) { g_prev_call = g_last_call; g_last_call = addr; }
     bump_ticks();
-    if (g_shadow_sp < 512) g_shadow[g_shadow_sp] = addr; g_shadow_sp++;
+    if (g_shadow_sp < 512) g_shadow[g_shadow_sp] = addr;
+    g_shadow_sp++;   /* depth still counts past the buffer it records into */
     SP -= 4; m68k_w32(SP, RET_SENTINEL);        /* fake return address on the 68k stack */
     uint32_t after = SP;
-    fn();
+    fn(entry);
     if (SP == after) SP += 4;                    /* C-style fn left it; discard */
     /* Pascal fn already popped it (and removed its args); SP is higher — leave it */
     if (g_shadow_sp > 0) g_shadow_sp--;
@@ -74,9 +120,11 @@ void m68k_rts(void) { if (m68k_r32(SP) == RET_SENTINEL) SP += 4; }
  * shared return tails (movea.l (a7)+,aX; ...; rts) and fall-throughs work. */
 void m68k_jump(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* rts'd to the fake return -> unwind */
+    uint32_t entry = 0;
     m68k_fn fn = ft_lookup(addr);
+    if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
     if (!fn) { fprintf(stderr, "m68k_jump: no function at %06x\n", addr); return; }
-    fn();
+    fn(entry);
 }
 
 /* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the

@@ -24,8 +24,6 @@ void qd_set_port(int is_screen, uint32_t base, int rowbytes, int bl, int bt){
     cur.is_screen=is_screen; cur.base=base; cur.rowbytes=rowbytes; cur.bl=bl; cur.bt=bt;
 }
 
-static int clamp(int x, int lo, int hi){ return x<lo?lo:x>hi?hi:x; }
-
 static void put(int h, int v, int black){
     if (h < clip.left || h >= clip.right || v < clip.top || v >= clip.bottom) return;
     if (cur.is_screen){

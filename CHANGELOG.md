@@ -8,6 +8,48 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **Entry-point dispatch: a jump into the middle of a function now lands.** The
+  original code reaches computed addresses through a register, and such a target
+  is typically not a branch target anywhere in the binary, so a table of
+  function *starts* could not express it -- `m68k_jump` reported
+  `no function at 5210bc` and dropped the transfer. Lifted functions now take an
+  `entry` address (0 = start from the top) and carry a prologue that switches on
+  it and `goto`s the matching label; the lifter labels **every instruction**,
+  not only branch targets, because the address that blocked HyperCard is not a
+  branch target. In the runtime, `m68k_register` takes `[start, end)` and a
+  lookup that misses the start hash falls back to a binary search for the
+  function whose body covers the address. This is a **breaking ABI change** for
+  generated code: re-lift, do not mix old and new segments.
+- `examples/entry_dispatch_test.c`, wired into `ctest`: entry at a start, at two
+  interior boundaries, into the second of two adjacent functions, and through
+  `m68k_call` with the stack balanced across it -- plus both failure modes, an
+  interior address that is not an instruction boundary (`m68k_entry_miss`) and
+  an address no function owns.
+- **`tools/conformance.py` + `tools/corpus.json` - the conformance harness**
+  required by house rules. Loops extract -> scan -> coverage over the corpus,
+  one row per title, and **fails on a drop below a recorded baseline** rather
+  than only on zero. Corpus images are copyrighted Mac media and live outside
+  the repo (`MACRECOMP_CORPUS`), so an absent title reports `SKIP` -- never a
+  silent pass, never a failure -- and CI exercises the harness either way.
+- **CI** (`.github/workflows/ci.yml`): build with `-Wall -Wextra -Werror`, run
+  `ctest`, run the Python self-checks, and run the conformance harness, on every
+  push and PR to `main`.
+
+### Changed
+
+- `m68k_register` now takes `(start, end, fn)`. An `end <= start` registers a
+  start-only entry, which cannot be entered part-way.
+- Re-measured HyperCard against the current HAL while the fixture was in hand:
+  **77%** of call sites and **47%** of distinct traps (was 76%/45%).
+
+### Fixed
+
+- Three dead static helpers (`push16`/`push32` in `toolbox.c`, `clamp` in
+  `quickdraw.c`) and an unused packed-row length in `CopyBits`, all surfaced by
+  turning warnings into errors for CI. The row length is skipped rather than
+  read because `unpackbits_row` stops on output length; that is now written
+  down, with the bound noted as a `ponytail:` shortcut.
+
 - **Partitioned Mac CD images** in `extract_resources.py`. A Mac CD-ROM is not a
   bare HFS volume: it opens with an `ER` driver descriptor and an Apple
   partition map, and the HFS volume sits at whatever block the `Apple_HFS`

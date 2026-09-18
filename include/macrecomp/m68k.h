@@ -96,11 +96,18 @@ static inline uint32_t m68k_asr(uint32_t v,int c,int sz){
 /* ---- Toolbox trap dispatch (implemented by the HAL) ---- */
 void m68k_trap(uint16_t word);     /* word = the full A-line opcode ($Axxx) */
 
-/* ---- function table: original 24-bit code address -> lifted C function ---- */
-typedef void (*m68k_fn)(void);
-void m68k_register(uint32_t addr, m68k_fn fn);
+/* ---- function table: original 24-bit code address -> lifted C function ----
+ *
+ * A lifted function takes an `entry` address so it can be entered part-way. 0
+ * means "run from the top"; any other value is an absolute code address inside
+ * the function, which its prologue turns into a goto. Computed jumps in the
+ * original code land mid-function, and a table of function *starts* alone
+ * cannot express that. */
+typedef void (*m68k_fn)(uint32_t entry);
+void m68k_register(uint32_t start, uint32_t end, m68k_fn fn);  /* [start,end) */
 void m68k_call(uint32_t addr);     /* resolve + invoke (jsr/bsr to a known target) */
 void m68k_jump(uint32_t addr);     /* tail transfer (jmp): no return address pushed */
+void m68k_entry_miss(uint32_t entry);  /* lifted prologue: address is not a boundary */
 void m68k_rts(void);               /* rts: pop the sentinel return address if present */
 void m68k_jt_call(uint32_t a5off); /* call through the A5 jump table (jsr d(a5)) */
 void m68k_jt_jump(uint32_t a5off); /* tail jmp through the A5 jump table */
