@@ -53,12 +53,53 @@ Two things had to change, and the second is the one that mattered:
 `0x10bc` now lifts to `case 0x10bcu: goto L10bc;` in `fn_16_0fea`, so the
 transfer resolves. All 21 segments still lift and compile.
 
-**What that does not yet establish:** whether HyperCard renders once it gets
-past this point. Running it needs a generated title tree, which is the user's
-and is never committed (house rules, section 3), so the next measurement is a
-run -- not a claim that can be made from here. `FSDispatch` and `FP68K` (SANE)
-are still stubs, and HyperCard cannot open its Home stack without the File
-Manager, so a rendered card is unlikely to be the very next thing that happens.
+### The run, measured
+
+A title tree was built locally to answer this (in `work/`, never committed) and
+HyperCard was run headless. **Entry dispatch holds: not one mid-function jump
+fails in a whole run.** The `no function at 5210bc` loop is gone.
+
+It now reaches **306 Toolbox calls** and stops in a hard loop -- the same count
+on every run, so it is a loop and not slow progress. The last calls name the
+cause exactly:
+
+```
+[278] DrawChar   [279] TextFont  [280] SetPBits  [281] SetPort
+[283] TextSize   [284] TextFace  [285] TextMode  [286] SetRect
+[287] TENew      <- unimplemented
+[289] GetDeviceList  [291] GetNextDevice  [295] ScriptUtil   <- unimplemented
+[297..300] NewEmptyHandle x4   [301..304] NewHandle x4   <- then it spins
+```
+
+HyperCard is setting up a text field, asks `TENew` for a `TEHandle`, gets
+nothing back, and loops allocating. **The blocker is now TextEdit**, which was
+already the third-ranked package in the table below. It is no longer anything to
+do with the lifter.
+
+Two other things the run settled:
+
+- The framebuffer is blank, but `SetPBits` at call 280 has pointed the port at
+  an offscreen bitmap, so that is consistent rather than contradictory. Nothing
+  is expected on screen yet.
+- Whole-run unimplemented *instructions* are now **zero**. The two that used to
+  fire were `rol.b`/`ror.b`, which the lifter did not lower; both now do.
+
+`FSDispatch` and `FP68K` (SANE) are still stubs, and HyperCard cannot open its
+Home stack without the File Manager, so a rendered card is still not the next
+thing to expect -- but TextEdit is what the program is asking for right now.
+
+Two loader details worth recording, because both cost time to rediscover and
+neither is in the repo:
+
+- **Segment bytes must be copied into guest memory at the load base**, not just
+  registered as functions. Lifted code is C, but PC-relative *data* reads --
+  string literals, constant tables, the resource type handed to `Get1Resource`
+  -- still go through `M.mem`. Without the copy they read zero, and HyperCard
+  quits during init after a `Get1Resource` with a null type. That one mistake
+  cost 280 of the 306 calls.
+- **Segment load bases must not overlap.** The range search added for entry
+  dispatch assumes function extents are disjoint, so the spacing has to exceed
+  the largest segment (28 KB here), not the average one.
 
 Entry dispatch is covered by `examples/entry_dispatch_test.c` (`ctest`), which
 checks entry at a start, at two interior boundaries, into the second of two
@@ -96,7 +137,7 @@ trap implemented.
 |---:|---:|---|---|
 | 162 | 47 | **QuickDraw, the tail** | `EmptyRect`, `Pt2Rect`, `GetPen`, `SetCursor`, `SetStdProcs`. Individually trivial; it is a long tail, not a structure. |
 | 88 | 17 | **SANE** | `FP68K`, `Elems68K`, `DECSTR68K`, the `Fix`/`Frac`/`X2` conversions. The one genuinely new subsystem left: 80-bit extended arithmetic, a package rather than a HAL passthrough. HyperTalk arithmetic needs it. |
-| 80 | 21 | **TextEdit** | `TENew`, `TESetText`, `TEUpdate`, `TEClick`. HyperCard's fields are TextEdit; the dialog edit items are stubs until this lands. |
+| 80 | 21 | **TextEdit** — *the live blocker* | `TENew`, `TESetText`, `TEUpdate`, `TEClick`. HyperCard's fields are TextEdit; a run stops dead at `TENew`. |
 | 41 | 14 | Window Manager | `MoveWindow`, `FindWindow`, `DragWindow` — real windows rather than one full-screen port. |
 | 39 | 20 | File Manager | `HFSDispatch`, `FSDispatch`. Needed to open a stack at all. |
 | 38 | 13 | Resource Manager | `GetResInfo`, `OpenRFPerm`, `Count1Resources`. |

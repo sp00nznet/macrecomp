@@ -81,9 +81,14 @@ static uint32_t res_get(uint32_t typelong, int id){
                 uint32_t p=heap_alloc(r->len); for(int k=0;k<r->len;k++) M.mem[p+k]=r->data[k];
                 uint32_t h=heap_alloc(4); m68k_w32(h,p); r->handle=h;
             }
+            if(getenv("MRTRACE")) fprintf(stderr, "  res '%s' %d -> %06x\n", want, id, r->handle);
             return r->handle;
         }
     }
+    /* A miss is the interesting case: a title that cannot find a resource it
+     * requires usually quits rather than complains, so this is often the last
+     * useful thing in a log. */
+    if(getenv("MRTRACE")) fprintf(stderr, "  res '%s' %d -> MISSING\n", want, id);
     return 0;
 }
 

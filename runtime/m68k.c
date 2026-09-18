@@ -95,7 +95,8 @@ void m68k_call(uint32_t addr) {
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
-    if (!fn) { fprintf(stderr, "m68k_call: no function at %06x\n", addr); return; }
+    if (!fn) { fprintf(stderr, "m68k_call: no function at %06x (last %06x, before %06x, depth %d)\n",
+                       addr, g_last_call, g_prev_call, g_shadow_sp); return; }
     if (addr != g_last_call) { g_prev_call = g_last_call; g_last_call = addr; }
     bump_ticks();
     if (g_shadow_sp < 512) g_shadow[g_shadow_sp] = addr;
@@ -123,7 +124,8 @@ void m68k_jump(uint32_t addr) {
     uint32_t entry = 0;
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
-    if (!fn) { fprintf(stderr, "m68k_jump: no function at %06x\n", addr); return; }
+    if (!fn) { fprintf(stderr, "m68k_jump: no function at %06x (last %06x, before %06x, depth %d)\n",
+                       addr, g_last_call, g_prev_call, g_shadow_sp); return; }
     fn(entry);
 }
 

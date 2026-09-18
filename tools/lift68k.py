@@ -320,8 +320,9 @@ def emit_inner(ins, targets):
                         C.append(f"  m68k_w{sz*8}(_ea+{off}u,{regref(r)});")
                 C.append("}")
             else: C.append(unimpl(ins))
-    elif base in ("lsl","lsr","asl","asr"):
-        fn={"lsl":"m68k_lsl","lsr":"m68k_lsr","asl":"m68k_asl","asr":"m68k_asr"}[base]
+    elif base in ("lsl","lsr","asl","asr","rol","ror"):
+        fn={"lsl":"m68k_lsl","lsr":"m68k_lsr","asl":"m68k_asl","asr":"m68k_asr",
+            "rol":"m68k_rol","ror":"m68k_ror"}[base]
         cnt = P(ops[0]).imm if P(ops[0]) and P(ops[0]).imm is not None else None
         if len(ops)==2 and cnt is not None:              # #cnt,Dn
             n=dnum(ops[1]); wf={1:"SET_DB",2:"SET_DW",4:"SET_DL"}[sz]; rf={1:"DB",2:"DW",4:"DL"}[sz]

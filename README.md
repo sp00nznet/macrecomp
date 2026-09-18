@@ -129,13 +129,16 @@ bugs behind that check moved execution past the error path, and it then stopped
 earlier, before anything was drawn, on an indirect jump into the middle of a
 function.
 
-**That jump now resolves.** Lifted functions take an entry address and label
-every instruction, and the runtime can find the function whose body covers an
-address rather than only the one that starts at it — so a computed jump lands
-where the original code meant it to. Whether HyperCard renders past that point
-is not yet measured: it needs a generated title tree, which is the user's and is
-never committed. [ROADMAP.md](ROADMAP.md) has the mechanism and what is still
-stubbed (`FSDispatch`, SANE).
+**That jump now resolves**, and a measured run says so: lifted functions take an
+entry address and label every instruction, the runtime finds the function whose
+body *covers* an address rather than only the one that starts at it, and **not
+one mid-function jump fails in a whole run**.
+
+HyperCard now reaches **306 Toolbox calls** and stops in a loop at `TENew` —
+it is building a text field, gets no `TEHandle` back, and spins allocating. The
+blocker is **TextEdit**, not the lifter. Whole-run unimplemented *instructions*
+are now zero. [ROADMAP.md](ROADMAP.md) has the trace and what is still stubbed
+(`FSDispatch`, SANE).
 
 Next target: **HyperCard** itself. It is one 68k `APPL`, and recompiling it makes
 every HyperCard stack a target at once rather than one title at a time — which

@@ -92,6 +92,23 @@ static inline uint32_t m68k_asr(uint32_t v,int c,int sz){
     if(c){ M.c=M.x=(v>>(c-1))&1; for(int i=0;i<c;i++) v=(v>>1)|sign; v&=m; } else M.c=0;
     M.n=(v&mb)!=0; M.z=(v==0); M.v=0; return v;
 }
+/* ---- rotates ----
+ * ROL/ROR, not ROXL/ROXR: the bit leaves one end and re-enters the other, and
+ * **X is not affected** -- only C, from the last bit rotated out. Rotating one
+ * bit at a time rather than by a shift-pair keeps the wrap cases right: ROL.B
+ * by 8 returns the value unchanged but still sets C from the original bit 7,
+ * which a `(v<<r)|(v>>(w-r))` form gets wrong when r is 0. Counts are 0-63, so
+ * the loop is cheap. */
+static inline uint32_t m68k_rol(uint32_t v,int c,int sz){
+    uint32_t m=szmask(sz),mb=msb(sz); v&=m; c&=63;
+    if(c){ for(int i=0;i<c;i++){ M.c=(v&mb)!=0; v=((v<<1)|(uint32_t)M.c)&m; } } else M.c=0;
+    M.n=(v&mb)!=0; M.z=(v==0); M.v=0; return v;
+}
+static inline uint32_t m68k_ror(uint32_t v,int c,int sz){
+    uint32_t m=szmask(sz),mb=msb(sz); v&=m; c&=63;
+    if(c){ for(int i=0;i<c;i++){ M.c=v&1; v=(v>>1)|(M.c?mb:0); } } else M.c=0;
+    M.n=(v&mb)!=0; M.z=(v==0); M.v=0; return v;
+}
 
 /* ---- Toolbox trap dispatch (implemented by the HAL) ---- */
 void m68k_trap(uint16_t word);     /* word = the full A-line opcode ($Axxx) */

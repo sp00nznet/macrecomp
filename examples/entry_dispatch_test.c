@@ -5,6 +5,9 @@
  * function *starts* cannot express that, so m68k_jump used to report
  * "no function at" and drop the transfer on the floor.
  *
+ * Also covers the ROL/ROR helpers, which live in the same substrate and whose
+ * wrap cases real code reaches.
+ *
  * The two functions below are hand-written in the shape lift68k.py now emits:
  * a prologue switch over the instruction boundaries, then the body. They stand
  * in for generated code so this runs without a recompiled title.
@@ -60,6 +63,32 @@ static void expect(const char *what, const uint32_t *want, int n){
     n_trace = 0;
 }
 
+/* ROL/ROR wrap cases. A rotate by a full width returns the value unchanged but
+ * still sets C from the bit that went round, and neither touches X -- both easy
+ * to lose in a shift-pair implementation, and both reached by real code. */
+static void check_rotates(void){
+    M.x = 1;
+    uint32_t v = m68k_rol(0x81u, 1, 1);          /* 1000_0001 -> 0000_0011, C=1 */
+    if(v != 0x03u || !M.c){ failures++; fprintf(stderr, "FAIL rol.b #1: %02x c=%d\n", v, M.c); }
+    if(!M.x){ failures++; fprintf(stderr, "FAIL rol.b touched X\n"); }
+
+    v = m68k_ror(0x81u, 1, 1);                   /* 1000_0001 -> 1100_0000, C=1 */
+    if(v != 0xC0u || !M.c){ failures++; fprintf(stderr, "FAIL ror.b #1: %02x c=%d\n", v, M.c); }
+
+    /* A full turn returns the value unchanged, and C is the LAST bit rotated
+     * out -- which by then has come all the way round, so it is the original
+     * bit 0, not bit 7. Both values below are 0x81-like in the high bit on
+     * purpose: only bit 0 decides C. */
+    v = m68k_rol(0x81u, 8, 1);
+    if(v != 0x81u || !M.c){ failures++; fprintf(stderr, "FAIL rol.b #8: %02x c=%d\n", v, M.c); }
+
+    v = m68k_rol(0x80u, 8, 1);                   /* same turn, original bit 0 is 0 */
+    if(v != 0x80u || M.c){ failures++; fprintf(stderr, "FAIL rol.b #8 (c): %02x c=%d\n", v, M.c); }
+
+    v = m68k_ror(0x00u, 0, 1);                   /* count 0: C cleared, Z set */
+    if(v != 0 || M.c || !M.z){ failures++; fprintf(stderr, "FAIL ror.b #0: c=%d z=%d\n", M.c, M.z); }
+}
+
 int main(void){
     /* m68k_call pushes a return address, so it needs real memory */
     M.memsize = 0x10000; M.mem = calloc(1, M.memsize);
@@ -100,6 +129,8 @@ int main(void){
     { const uint32_t w[] = {0};
       fprintf(stderr, "-- expect one 'no function at' below --\n");
       m68k_jump(0x900000); expect("unowned address", w, 0); }
+
+    check_rotates();
 
     free(M.mem);
     if(failures){ fprintf(stderr, "%d check(s) failed\n", failures); return 1; }

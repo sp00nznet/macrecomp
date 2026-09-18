@@ -8,6 +8,37 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **`rol`/`ror` in the lifter and runtime.** `m68k_rol`/`m68k_ror` rotate a bit
+  at a time rather than by a shift pair, because a full-width rotate returns the
+  value unchanged but still sets C from the last bit rotated out -- which by
+  then has come all the way round, so it is the original bit 0, not bit 7.
+  Neither touches X (that is ROXL/ROXR). Static unimplemented instructions
+  across HyperCard's 21 segments drop 417 -> 384 of 102,941 (0.37%), and a whole
+  run now executes **zero** unimplemented instructions: the two it used to hit
+  were exactly these.
+- **Caller context in the two `no function at` messages.** They now name the last
+  two functions entered and the call depth, from the shadow stack the runtime
+  already keeps. An address with no owner was previously reported with no hint of
+  who asked for it.
+- **Resource-lookup tracing under `MRTRACE`.** `res_get` logs each type/id and
+  whether it hit. A miss is the interesting case: a title that cannot find a
+  resource it needs usually quits rather than complains, so this is often the
+  last useful line in a log -- which is exactly how a `Get1Resource` with a null
+  type got found.
+- Rotate wrap cases added to `examples/entry_dispatch_test.c`.
+
+### Changed
+
+- **Measured: entry dispatch holds.** HyperCard was run from a locally built
+  title tree (never committed, house rules section 3). Not one mid-function jump
+  fails in a whole run; the `no function at 5210bc` loop is gone. It now reaches
+  **306 Toolbox calls** and stops in a hard loop at `TENew` while building a text
+  field. **The blocker is TextEdit**, not the lifter. See ROADMAP for the trace,
+  and for the two loader details that cost the most time to rediscover: segment
+  bytes have to be copied into guest memory at the load base (PC-relative *data*
+  reads still go through `M.mem`), and segment bases must not overlap, because
+  the range search added for entry dispatch assumes disjoint extents.
+
 - **Entry-point dispatch: a jump into the middle of a function now lands.** The
   original code reaches computed addresses through a register, and such a target
   is typically not a branch target anywhere in the binary, so a table of
