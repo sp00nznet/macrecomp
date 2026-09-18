@@ -8,7 +8,7 @@ by guess — the numbers come from `scan_traps.py --coverage`.
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered | Traps covered |
 |---|---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** | 69% |
-| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **77%** | 47% |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **79%** | 52% |
 
 Reproduce either row:
 
@@ -72,9 +72,51 @@ cause exactly:
 ```
 
 HyperCard is setting up a text field, asks `TENew` for a `TEHandle`, gets
-nothing back, and loops allocating. **The blocker is now TextEdit**, which was
-already the third-ranked package in the table below. It is no longer anything to
-do with the lifter.
+nothing back, and loops allocating.
+
+### TextEdit (landed) -- and the loop is not it
+
+`runtime/textedit.c` implements all 22 TextEdit traps over HyperCard's 81 call
+sites, and coverage went 77% -> 79% of call sites (the conformance harness
+reported it as a `GAIN`, which is what that check is for). The TERec lives in
+**guest memory**: a TEHandle dereferences to it and the guest reads `teLength`,
+`selStart`/`selEnd`, `hText`, `nLines` and `lineStarts` directly, so a host-side
+mirror would only be a second copy to keep in sync.
+
+**It did not clear the hang.** The run still stops after exactly 306 Toolbox
+calls. `TENew` now returns a real handle, so the cause was something else and
+the `TENew` reading was a coincidence of ordering -- worth stating plainly,
+because the previous entry here implied otherwise.
+
+What the hang is *not*, all now measured: not entry dispatch (no mid-function
+jump fails), not an unimplemented instruction (a run executes none), not
+TextEdit, and not a missing trap at the stall -- the last five calls are
+`NewEmptyHandle` x4 and `NewHandle` x4, all implemented, all succeeding.
+
+It makes **no traps, no calls and no tail jumps** while looping: `MRMAXCALLS`
+does not fire at three million transfers. That narrows it to a plain `goto`
+loop wholly inside one lifted function. The shadow stack at the last trap gives
+the six frames it is inside:
+
+```
+[0] 5139a2  fn_1_39a2    the entry point
+[1] 5300e4  fn_3_00e4
+[2] 531e92  fn_3_1e92
+[3] 530e3a  fn_3_0e3a
+[4] 610896  fn_17_0896
+[5] 514620  fn_1_4620    NewHandle glue (innermost, returns)
+```
+
+Finding it needs instruction-level visibility that does not exist yet: the
+obvious next instrument is a backward-branch budget emitted by the lifter under
+a debug flag, since neither the trap trace nor the transfer watchdog can see a
+loop that performs neither. (`gdb` in the MSYS2 toolchain here is broken --
+missing `libxxhash.dll` -- so a native backtrace was not available.)
+
+Three debugging instruments landed while chasing it, and all three stay:
+`MRMAXCALLS=<n>` stops after n transfers and prints the shadow stack;
+`MRSTACK=1` prints the whole shadow stack at every trap; and each `MRTRACE`
+line now carries the calling function and the call depth.
 
 Two other things the run settled:
 
@@ -137,7 +179,6 @@ trap implemented.
 |---:|---:|---|---|
 | 162 | 47 | **QuickDraw, the tail** | `EmptyRect`, `Pt2Rect`, `GetPen`, `SetCursor`, `SetStdProcs`. Individually trivial; it is a long tail, not a structure. |
 | 88 | 17 | **SANE** | `FP68K`, `Elems68K`, `DECSTR68K`, the `Fix`/`Frac`/`X2` conversions. The one genuinely new subsystem left: 80-bit extended arithmetic, a package rather than a HAL passthrough. HyperTalk arithmetic needs it. |
-| 80 | 21 | **TextEdit** — *the live blocker* | `TENew`, `TESetText`, `TEUpdate`, `TEClick`. HyperCard's fields are TextEdit; a run stops dead at `TENew`. |
 | 41 | 14 | Window Manager | `MoveWindow`, `FindWindow`, `DragWindow` — real windows rather than one full-screen port. |
 | 39 | 20 | File Manager | `HFSDispatch`, `FSDispatch`. Needed to open a stack at all. |
 | 38 | 13 | Resource Manager | `GetResInfo`, `OpenRFPerm`, `Count1Resources`. |

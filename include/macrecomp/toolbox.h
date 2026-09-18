@@ -91,4 +91,27 @@ void plat_shutdown(void);
 /* next event; fills a minimal EventRecord-ish; returns 1 if a real event */
 int  plat_next_event(int *what, int *msg, int *modh, int *modv);
 
+/* ---- allocation out of the guest heap (toolbox.c owns the bump heap) ---- */
+uint32_t mr_alloc(uint32_t n);   /* 0 if the heap cannot satisfy it */
+
+/* ---- TextEdit (textedit.c). The TERec lives in guest memory; a TEHandle
+ * dereferences to it, so the guest reads teLength/selStart/hText directly. ---- */
+uint32_t te_new(uint32_t destPtr, uint32_t viewPtr);   /* -> TEHandle */
+void     te_dispose(uint32_t hTE);
+void     te_set_text(uint32_t hTE, uint32_t src, int len);
+uint32_t te_get_text(uint32_t hTE);                    /* -> the hText Handle */
+void     te_calc(uint32_t hTE);                        /* reflow line starts */
+void     te_update(uint32_t hTE);                      /* draw text + caret */
+void     te_set_select(uint32_t hTE, int a, int b);
+void     te_activate(uint32_t hTE, int on);
+void     te_idle(uint32_t hTE);                        /* blink the caret */
+void     te_click(uint32_t hTE, int h, int v, int extend);
+void     te_key(uint32_t hTE, int ch);
+void     te_insert(uint32_t hTE, uint32_t src, int len);
+void     te_delete(uint32_t hTE);
+void     te_cut(uint32_t hTE);
+void     te_copy(uint32_t hTE);
+void     te_paste(uint32_t hTE);
+void     te_text_box(uint32_t src, int len, const Rect *box, int just);
+
 #endif /* MACRECOMP_TOOLBOX_H */

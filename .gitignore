@@ -20,3 +20,6 @@ work/
 .idea/
 *.swp
 .DS_Store
+
+# selftest / run output
+*.pgm

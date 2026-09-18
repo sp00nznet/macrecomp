@@ -182,6 +182,8 @@ static void lowmem_init(void){
 }
 
 static int g_inited = 0;
+uint32_t mr_alloc(uint32_t n){ return heap_alloc(n); }
+
 void toolbox_init(void){ qd_init(); heap_init(); lowmem_init(); g_inited=1; }
 
 /* ---- PICT v1 decode + blit (DrawPicture) ---- */
@@ -240,7 +242,13 @@ static void logtrap(uint16_t w){
 
 void m68k_trap(uint16_t raw){
     uint16_t w = norm(raw);
-    if(getenv("MRTRACE")){ static long n=0; fprintf(stderr,"[%5ld] $%04X\n", n++, w); }
+    if(getenv("MRTRACE")){ static long n=0;
+        fprintf(stderr,"[%5ld] $%04X  from %06x  depth %d\n", n++, w, g_last_call, g_shadow_sp);
+        /* MRSTACK: the whole shadow stack per trap. The last trap before a hang
+         * names every frame the loop could be in; a single caller address does
+         * not, because the loop is usually in an outer frame. */
+        if(getenv("MRSTACK")){ int d=g_shadow_sp<512?g_shadow_sp:512;
+            for(int i=0;i<d;i++) fprintf(stderr,"        [%d] %06x\n", i, g_shadow[i]); } }
     { const char *mp=getenv("MRPRESENT"); if(mp){ int iv=atoi(mp); if(iv<=0)iv=300;
         static long p=0; if(++p%iv==0) plat_present(); } }
     switch(w){
@@ -250,6 +258,50 @@ void m68k_trap(uint16_t raw){
     case 0xA9CC: /*TEInit*/    case 0xA063: /*MaxApplZone*/ case 0xA850: /*InitCursor*/
     case 0xA036: /*MoreMasters*/ break;
     case 0xA97B: /*InitDialogs*/ (void)pop32(); break;   /* arg: resumeProc */
+
+    /* ---- TextEdit (textedit.c) ----
+     * Pascal order: the last argument pushed is the first popped, and the
+     * result slot the caller reserved sits at SP once they all are. */
+    case 0xA9D2: { /*TENew(destRect,viewRect): TEHandle*/
+        uint32_t view=pop32(), dest=pop32(); ret32(te_new(dest,view)); } break;
+    case 0xA9CD: /*TEDispose*/ te_dispose(pop32()); break;
+    case 0xA9CF: { /*TESetText(text,length,hTE)*/
+        uint32_t h=pop32(); uint32_t n=pop32(); uint32_t t=pop32();
+        te_set_text(h,t,(int)n); } break;
+    case 0xA9CB: { /*TEGetText(hTE): CharsHandle*/
+        uint32_t h=pop32(); ret32(te_get_text(h)); } break;
+    case 0xA9D0: /*TECalText*/ te_calc(pop32()); break;
+    case 0xA9D3: { /*TEUpdate(rUpdate,hTE)*/
+        uint32_t h=pop32(); (void)pop32(); te_update(h); } break;
+    case 0xA9D8: /*TEActivate*/   te_activate(pop32(),1); break;
+    case 0xA9D9: /*TEDeactivate*/ te_activate(pop32(),0); break;
+    case 0xA9DA: /*TEIdle*/       te_idle(pop32()); break;
+    case 0xA9D1: { /*TESetSelect(selStart,selEnd,hTE)*/
+        uint32_t h=pop32(); uint32_t b=pop32(); uint32_t a=pop32();
+        te_set_select(h,(int)a,(int)b); } break;
+    case 0xA9D4: { /*TEClick(pt,extend,hTE)*/
+        uint32_t h=pop32(); int ext=pop16()!=0; uint32_t pt=pop32();
+        int ph,pv; pt_unpack(pt,&ph,&pv); te_click(h,ph,pv,ext); } break;
+    case 0xA9DC: { /*TEKey(key,hTE)*/
+        uint32_t h=pop32(); int c=pop16()&0xFF; te_key(h,c); } break;
+    case 0xA9DE: { /*TEInsert(text,length,hTE)*/
+        uint32_t h=pop32(); uint32_t n=pop32(); uint32_t t=pop32();
+        te_insert(h,t,(int)n); } break;
+    case 0xA9D7: /*TEDelete*/ te_delete(pop32()); break;
+    case 0xA9D6: /*TECut*/    te_cut(pop32());    break;
+    case 0xA9D5: /*TECopy*/   te_copy(pop32());   break;
+    case 0xA9DB: /*TEPaste*/  te_paste(pop32());  break;
+    case 0xA9CE: { /*TETextBox(text,length,box,just)*/
+        (void)pop16(); uint32_t bx=pop32(); uint32_t n=pop32(); uint32_t t=pop32();
+        Rect b=rd_rect(bx); te_text_box(t,(int)n,&b,0); } break;
+    /* Scrolling is not modelled: destRect is where the text is drawn and the
+     * view clips it, so a scroll that moved destRect would need the caret and
+     * click mapping to follow. Accept and reflow instead of drifting.
+     * ponytail: no scroll offset; add one when a title scrolls a real field. */
+    case 0xA9DD: /*TEScroll*/ case 0xA812: { /*TEPinScroll(dh,dv,hTE)*/
+        uint32_t h=pop32(); (void)pop16(); (void)pop16(); te_calc(h); } break;
+    case 0xA813: { /*TEAutoView(auto,hTE)*/ (void)pop32(); (void)pop16(); } break;
+    case 0xA811: /*TESelView*/ (void)pop32(); break;
     case 0xA032: /*FlushEvents*/ (void)pop32(); break;
     case 0xA9F4: /*ExitToShell*/ fprintf(stderr,"[ExitToShell]\n"); plat_present(); exit(0);
 

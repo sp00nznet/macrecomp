@@ -8,6 +8,41 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **TextEdit (`runtime/textedit.c`)** - all 22 TextEdit traps over HyperCard's
+  81 call sites. Coverage 77% -> **79%** of call sites, 47% -> **52%** of
+  distinct traps; the conformance harness reported it as a `GAIN`, which is what
+  that check exists for. The TERec lives in **guest memory**: a TEHandle
+  dereferences to it and the guest reads `teLength`, `selStart`/`selEnd`,
+  `hText`, `nLines` and `lineStarts` directly, so a host-side mirror would only
+  be a second copy to keep in sync. Line breaking is arithmetic rather than
+  measurement because the HAL's font is fixed-pitch. Not included: styled text
+  (`TEStyleNew`), word-break and click-loop hooks, and scrolling -- `TEScroll`
+  and `TEPinScroll` reflow instead of moving `destRect`, marked `ponytail:`.
+- `mr_alloc` in `toolbox.h`, so a HAL module other than `toolbox.c` can take
+  memory from the guest heap without a second allocator.
+- **Three debugging instruments**, all kept: `MRMAXCALLS=<n>` stops after n
+  lifted transfers and prints the shadow stack; `MRSTACK=1` prints the whole
+  shadow stack at every trap; and each `MRTRACE` line now carries the calling
+  function and the call depth. The transfer watchdog counts tail jumps as well
+  as calls -- a loop spanning functions goes round through `m68k_jump`, and
+  counting only calls misses it.
+- TextEdit checks in `examples/hal_selftest.c`, asserted on the TERec fields the
+  guest reads back: CR line splitting, selection clamping and normalisation,
+  `TEKey` insert and caret advance, backspace, and a `TECut`/`TEPaste`
+  round-trip.
+
+### Changed
+
+- **TextEdit did not clear the hang, and the ROADMAP now says so.** HyperCard
+  still stops after exactly 306 Toolbox calls. `TENew` returning nothing was a
+  coincidence of ordering, not the cause. What the hang is *not* is now measured:
+  not entry dispatch, not an unimplemented instruction, not TextEdit, and not a
+  missing trap at the stall -- the last eight calls are `NewEmptyHandle` and
+  `NewHandle`, all implemented and all succeeding. It performs no traps, no
+  calls and no tail jumps while looping (`MRMAXCALLS` does not fire at three
+  million), which places it inside a single lifted function. The shadow stack
+  narrows it to six frames; the ROADMAP lists them.
+
 - **`rol`/`ror` in the lifter and runtime.** `m68k_rol`/`m68k_ror` rotate a bit
   at a time rather than by a shift pair, because a full-width rotate returns the
   value unchanged but still sets C from the last bit rotated out -- which by

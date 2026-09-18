@@ -236,6 +236,73 @@ static void draw_scene(void){
     fclose(f);
 }
 
+
+/* TextEdit. The TERec lives in guest memory, so these assert the fields the
+ * guest actually reads back -- teLength, selStart/selEnd, nLines, hText -- not
+ * just that the traps return without complaining. */
+#define TE_SELSTART 32
+#define TE_SELEND   34
+#define TE_LENGTH   60
+#define TE_HTEXT    62
+#define TE_NLINES   94
+
+static uint32_t te_make(int w, int h){
+    uint32_t d = rect(0,0,w,h), v = rect(0,0,w,h);
+    call_begin(4); push32(d); push32(v); TRAP(0xA9D2);   /* TENew */
+    return call_end32();
+}
+static void te_settext(uint32_t hTE, const char *t){
+    int n = (int)strlen(t); uint32_t p = alloc(n+1);
+    for(int i=0;i<n;i++) m68k_w8(p+i,(uint8_t)t[i]);
+    push32(p); push32((uint32_t)n); push32(hTE); TRAP(0xA9CF);   /* TESetText */
+}
+static void test_textedit(void){
+    printf("TextEdit\n");
+    uint32_t hTE = te_make(200, 80);
+    CHECK(hTE != 0, "TENew should return a TEHandle");
+    uint32_t rec = m68k_r32(hTE);
+    CHECK(rec != 0, "the TEHandle should dereference to a TERec");
+    CHECK(m68k_r32(rec+TE_HTEXT) != 0, "a fresh TERec still needs an hText handle");
+
+    te_settext(hTE, "hello");
+    CHECK(rd16(rec+TE_LENGTH) == 5, "teLength should be 5, got %d", rd16(rec+TE_LENGTH));
+    CHECK(rd16(rec+TE_NLINES) == 1, "one short line, got %d", rd16(rec+TE_NLINES));
+
+    /* a CR starts a new line */
+    te_settext(hTE, "ab\rcd");
+    CHECK(rd16(rec+TE_LENGTH) == 5, "teLength across a CR");
+    CHECK(rd16(rec+TE_NLINES) == 2, "a CR should split into 2 lines, got %d", rd16(rec+TE_NLINES));
+
+    /* TESetSelect clamps to the text, and a reversed range is normalised */
+    push32(1); push32(3); push32(hTE); TRAP(0xA9D1);
+    CHECK(rd16(rec+TE_SELSTART)==1 && rd16(rec+TE_SELEND)==3, "selection 1..3");
+    push32(99); push32(99); push32(hTE); TRAP(0xA9D1);
+    CHECK(rd16(rec+TE_SELSTART)==5, "selection clamps to teLength, got %d", rd16(rec+TE_SELSTART));
+
+    /* typing at the selection inserts and advances the caret */
+    push32(2); push32(2); push32(hTE); TRAP(0xA9D1);
+    push16('X'); push32(hTE); TRAP(0xA9DC);                       /* TEKey */
+    CHECK(rd16(rec+TE_LENGTH)==6, "TEKey should insert one char, got %d", rd16(rec+TE_LENGTH));
+    CHECK(rd16(rec+TE_SELSTART)==3, "caret should advance to 3, got %d", rd16(rec+TE_SELSTART));
+    uint32_t tp = m68k_r32(m68k_r32(rec+TE_HTEXT));
+    CHECK(m68k_r8(tp+2)=='X', "the inserted char should land at offset 2");
+
+    /* backspace removes it again */
+    push16(8); push32(hTE); TRAP(0xA9DC);
+    CHECK(rd16(rec+TE_LENGTH)==5, "backspace should delete one char, got %d", rd16(rec+TE_LENGTH));
+
+    /* cut then paste round-trips the selection */
+    push32(0); push32(2); push32(hTE); TRAP(0xA9D1);
+    push32(hTE); TRAP(0xA9D6);                                    /* TECut */
+    CHECK(rd16(rec+TE_LENGTH)==3, "cut of 2 chars leaves 3, got %d", rd16(rec+TE_LENGTH));
+    push32(hTE); TRAP(0xA9DB);                                    /* TEPaste */
+    CHECK(rd16(rec+TE_LENGTH)==5, "paste restores to 5, got %d", rd16(rec+TE_LENGTH));
+
+    /* TEUpdate must not fault on a live record */
+    uint32_t up = rect(0,0,200,80);
+    push32(up); push32(hTE); TRAP(0xA9D3);
+}
+
 int main(void){
     M.memsize = 8u*1024*1024; M.mem = calloc(1,M.memsize);
     SP = 0x100000;
@@ -245,6 +312,7 @@ int main(void){
     test_regions();
     test_dialog();
     test_memory();
+    test_textedit();
     draw_scene();
 
     if(g_fail){ printf("HAL selftest: %d check(s) FAILED\n", g_fail); return 1; }

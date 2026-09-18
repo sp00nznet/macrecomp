@@ -99,7 +99,7 @@ cost of a title is a number before any of it is lifted:
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered |
 |---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** |
-| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **77%** |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **79%** |
 
 ```bash
 python tools/scan_traps.py work/unpacked --coverage runtime/toolbox.c
@@ -134,11 +134,13 @@ entry address and label every instruction, the runtime finds the function whose
 body *covers* an address rather than only the one that starts at it, and **not
 one mid-function jump fails in a whole run**.
 
-HyperCard now reaches **306 Toolbox calls** and stops in a loop at `TENew` —
-it is building a text field, gets no `TEHandle` back, and spins allocating. The
-blocker is **TextEdit**, not the lifter. Whole-run unimplemented *instructions*
-are now zero. [ROADMAP.md](ROADMAP.md) has the trace and what is still stubbed
-(`FSDispatch`, SANE).
+HyperCard reaches **306 Toolbox calls** and then hangs. TextEdit has since
+landed (all 22 traps, 77% → 79% of call sites) and **did not clear it**, so the
+hang is not that either. It is now known not to be entry dispatch, not an
+unimplemented instruction, not a missing trap at the stall — and it makes no
+traps, calls or tail jumps while looping, which places it inside a single
+lifted function. [ROADMAP.md](ROADMAP.md) has the shadow stack, the debugging
+switches, and what is still stubbed (`FSDispatch`, SANE).
 
 Next target: **HyperCard** itself. It is one 68k `APPL`, and recompiling it makes
 every HyperCard stack a target at once rather than one title at a time — which

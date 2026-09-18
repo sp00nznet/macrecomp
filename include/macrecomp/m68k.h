@@ -125,6 +125,13 @@ void m68k_register(uint32_t start, uint32_t end, m68k_fn fn);  /* [start,end) */
 void m68k_call(uint32_t addr);     /* resolve + invoke (jsr/bsr to a known target) */
 void m68k_jump(uint32_t addr);     /* tail transfer (jmp): no return address pushed */
 void m68k_entry_miss(uint32_t entry);  /* lifted prologue: address is not a boundary */
+
+/* The last two lifted functions entered, and the call depth. Kept for
+ * debugging: at any trap, g_last_call names the function that made it, which is
+ * the cheapest way to locate a title that then stops making progress. */
+extern volatile uint32_t g_last_call, g_prev_call;
+extern volatile uint32_t g_shadow[512];
+extern volatile int g_shadow_sp;
 void m68k_rts(void);               /* rts: pop the sentinel return address if present */
 void m68k_jt_call(uint32_t a5off); /* call through the A5 jump table (jsr d(a5)) */
 void m68k_jt_jump(uint32_t a5off); /* tail jmp through the A5 jump table */

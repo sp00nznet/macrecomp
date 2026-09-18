@@ -90,8 +90,34 @@ static void bump_ticks(void){
 volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
 volatile uint32_t g_shadow[512]; volatile int g_shadow_sp = 0;   /* shadow call stack */
 
+/* MRMAXCALLS=<n>: stop after n lifted transfers and print the shadow stack.
+ *
+ * A title that hangs prints nothing, and the hang is often a loop that makes no
+ * Toolbox calls at all -- so the trap trace simply stops and says nothing about
+ * where. This turns "it hangs" into a call stack.
+ *
+ * Counts tail jumps as well as calls. A loop that spans functions goes round
+ * through m68k_jump (the compiler's shared return tails are reached that way),
+ * and counting only calls misses it entirely. A loop wholly inside one lifted
+ * function is a plain `goto` and is still invisible here -- for that, the
+ * last-call address on the final trap line is the lead.
+ *
+ * Read once: getenv in the transfer path costs more than the dispatch it
+ * guards. */
+static long g_calls, g_maxcalls = -1;
+static void watchdog(void) {
+    fprintf(stderr, "\nm68k: MRMAXCALLS=%ld reached -- shadow stack, innermost last:\n", g_maxcalls);
+    int n = g_shadow_sp < 512 ? g_shadow_sp : 512;
+    for (int i = 0; i < n; i++) fprintf(stderr, "  [%3d] %06x\n", i, g_shadow[i]);
+    if (g_shadow_sp > 512) fprintf(stderr, "  (%d deeper frames not recorded)\n", g_shadow_sp - 512);
+    fprintf(stderr, "  last %06x, before %06x\n", g_last_call, g_prev_call);
+    exit(2);
+}
+
 void m68k_call(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
+    if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
+    if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
@@ -121,6 +147,8 @@ void m68k_rts(void) { if (m68k_r32(SP) == RET_SENTINEL) SP += 4; }
  * shared return tails (movea.l (a7)+,aX; ...; rts) and fall-throughs work. */
 void m68k_jump(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* rts'd to the fake return -> unwind */
+    if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
+    if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
     uint32_t entry = 0;
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
