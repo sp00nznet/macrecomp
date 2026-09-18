@@ -6,7 +6,25 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A document's own resource fork** (`OpenRFPerm`, `OpenResFile`). A stack
+  carries its own resources and HyperCard opens them before reading a card. The
+  fork is a self-contained database, so `files.c` parses it once -- header, type
+  list, reference lists, data area -- and hands the contents to the Resource
+  Manager rather than reading it back a piece at a time. `res_get` now searches
+  the current resource file first and the application's own fork second, which
+  is the Resource Manager's chain shortened to the two links that exist here.
+  Left unimplemented, `OpenRFPerm` did not merely return nothing: it left three
+  arguments on the Pascal stack.
+
 ### Fixed
+
+- **`BlockMove` was unbounded.** It indexed `M.mem` directly, so a stale pointer
+  read and wrote *outside* the guest address space and corrupted the host's own
+  heap -- damage that then surfaces anywhere at all with nothing tying it back.
+  It is now bounds-checked like every other guest access, and handles
+  overlapping moves, which BlockMove is required to.
 
 - **`dbra` loops were all no-ops - 563 of them.** `DBcc` loops while its
   condition is **false**, the opposite of `Bcc`. `dbra` is the assembler's

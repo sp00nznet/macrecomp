@@ -59,31 +59,46 @@ static uint32_t heap_alloc(uint32_t sz){
 }
 
 /* ---- Resource Manager: serve the app's own extracted resources ---- */
-typedef struct { char type[6]; int id; const uint8_t *data; int len; uint32_t handle; } Res;
+typedef struct { int file; char type[6]; int id; const uint8_t *data; int len; uint32_t handle; } Res;
 static Res g_res[6000]; static int g_nres;
-void res_add(const char *type, int id, const uint8_t *data, int len){
+static int g_curres = 1;                  /* 1 = the application's own fork */
+
+void res_add_file(int refnum, const char *type, int id, const uint8_t *data, int len){
     if(g_nres>=(int)(sizeof g_res/sizeof*g_res)) return;
     Res *r=&g_res[g_nres++]; int i=0;
     for(;i<5&&type[i];i++) r->type[i]=type[i];
     while(i>0&&r->type[i-1]==' ') i--;           /* strip trailing spaces */
-    r->type[i]=0; r->id=id; r->data=data; r->len=len; r->handle=0;
+    r->type[i]=0; r->file=refnum; r->id=id; r->data=data; r->len=len; r->handle=0;
 }
+void res_add(const char *type, int id, const uint8_t *data, int len){
+    res_add_file(1, type, id, data, len);
+}
+void res_use_file(int refnum){ if(refnum) g_curres = refnum; }
+int  res_cur_file(void){ return g_curres; }
 static void type4(uint32_t t, char *out){ /* 'PICT' long -> stripped string */
     out[0]=t>>24; out[1]=t>>16; out[2]=t>>8; out[3]=t; out[4]=0;
     int n=4; while(n>0&&out[n-1]==' ') out[--n]=0;
 }
+/* Search the current resource file first, then the application's own fork --
+ * the Resource Manager's chain, shortened to the two links that exist here. A
+ * stack's own icons and scripts must win over HyperCard's. */
 static uint32_t res_get(uint32_t typelong, int id){
     char want[5]; type4(typelong,want);
-    for(int i=0;i<g_nres;i++){
-        if(g_res[i].id==id && strcmp(g_res[i].type,want)==0){
+    for(int pass=0; pass<2; pass++){
+      int wantfile = pass==0 ? g_curres : 1;
+      if(pass==1 && g_curres==1) break;
+      for(int i=0;i<g_nres;i++){
+        if(g_res[i].file==wantfile && g_res[i].id==id && strcmp(g_res[i].type,want)==0){
             Res *r=&g_res[i];
             if(!r->handle){                       /* lazy: copy into M.mem, make a handle */
                 uint32_t p=heap_alloc(r->len); for(int k=0;k<r->len;k++) M.mem[p+k]=r->data[k];
                 uint32_t h=heap_alloc(4); m68k_w32(h,p); r->handle=h;
             }
-            if(getenv("MRTRACE")) fprintf(stderr, "  res '%s' %d -> %06x\n", want, id, r->handle);
+            if(getenv("MRTRACE")) fprintf(stderr, "  res '%s' %d (file %d) -> %06x\n",
+                                          want, id, wantfile, r->handle);
             return r->handle;
         }
+      }
     }
     /* A miss is the interesting case: a title that cannot find a resource it
      * requires usually quits rather than complains, so this is often the last
@@ -642,8 +657,15 @@ void m68k_trap(uint16_t raw){
         m68k_w32(nh,np); hsz_set(nh,sz);
         M.a[0]=nh; M.d[0]=0; } break;
     case 0xA9AF: /*ResError*/ ret16(0); M.d[0]=0; break;
-    case 0xA994: /*CurResFile*/ case 0xA997: /*OpenResFile*/ ret16(1); break;
-    case 0xA998: /*UseResFile*/ (void)pop16(); break;
+    case 0xA994: /*CurResFile*/ ret16((uint16_t)res_cur_file()); break;
+    case 0xA997: /*OpenResFile*/ { uint32_t nm=pop32(); ret16((uint16_t)fs_open_resfork(nm)); } break;
+    case 0xA998: /*UseResFile*/ res_use_file((int16_t)pop16()); break;
+    /* OpenRFPerm(fileName, vRefNum, permission): INTEGER. A document's own
+     * resource fork. Left unimplemented this does not merely return nothing --
+     * it leaves three arguments on the Pascal stack. */
+    case 0xA9C4: { /*OpenRFPerm*/
+        (void)pop16(); (void)pop16(); uint32_t nm=pop32();
+        ret16((uint16_t)fs_open_resfork(nm)); } break;
     case 0xA99B: /*CloseResFile*/ (void)pop16(); break;
     case 0xA992: /*DetachResource*/ case 0xA9A3: /*ReleaseResource*/ case 0xA9A4: /*LoadResource*/
     case 0xA99A: /*HomeResFile? */ (void)pop32(); break;
@@ -659,7 +681,16 @@ void m68k_trap(uint16_t raw){
         if(hh){ m68k_w32(hh,0); hsz_set(hh,0); } M.a[0]=hh; M.d[0]=hh?0:-108; } break;
     case 0xA01F: /*DisposePtr*/ case 0xA023: /*DisposeHandle*/ M.d[0]=0; break;
     case 0xA02E: /*BlockMove*/ { uint32_t src=M.a[0],dst=M.a[1],n=M.d[0];
-        for(uint32_t i=0;i<n;i++) M.mem[dst+i]=M.mem[src+i]; } break;
+        /* Bounds-checked like every other guest access. Indexing M.mem directly
+         * reads and writes *outside* the guest's address space when a pointer
+         * is stale, corrupting the host's own heap -- which then shows up as
+         * damage anywhere at all, with nothing to connect it back to here.
+         * Overlapping moves must also work: BlockMove is memmove, not memcpy. */
+        if(src < dst && dst - src < n)
+            for(uint32_t i=n; i-- > 0; ) m68k_w8(dst+i, m68k_r8(src+i));
+        else
+            for(uint32_t i=0;i<n;i++) m68k_w8(dst+i, m68k_r8(src+i));
+        M.d[0]=0; } break;
     case 0xA029: /*HLock*/ case 0xA02A: /*HUnlock*/ case 0xA02B: /*EmptyHandle*/
     case 0xA049: /*HPurge*/ case 0xA04A: /*HNoPurge*/ case 0xA04B: /*SetGrowZone*/
     case 0xA04C: /*CompactMem*/ case 0xA064: /*MoveHHi*/ case 0xA069: /*HGetState*/

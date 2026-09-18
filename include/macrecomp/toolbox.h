@@ -14,6 +14,12 @@
 
 void toolbox_init(void);   /* qd_init + heap; call once after M.mem is allocated */
 void res_add(const char *type, int id, const uint8_t *data, int len);  /* register a resource */
+/* Resources belonging to an opened file rather than to the application. A
+ * document carries its own, and a title expects the one it just opened to be
+ * searched first. refnum 1 is the application itself. */
+void res_add_file(int refnum, const char *type, int id, const uint8_t *data, int len);
+void res_use_file(int refnum);
+int  res_cur_file(void);
 
 typedef struct { int16_t top, left, bottom, right; } Rect;   /* Mac field order */
 typedef struct { int16_t v, h; } Point;
@@ -101,6 +107,7 @@ void fs_add(const char *name, const char *type, const char *creator,
             const char *dpath, uint32_t dlen, const char *rpath, uint32_t rlen);
 int  fs_trap(uint16_t w);        /* 1 if this trap was a File Manager call */
 int  fs_dispatch(uint16_t w);    /* FSDispatch / HFSDispatch (selector in D0) */
+int  fs_open_resfork(uint32_t namePtr);  /* a document's own resource fork */
 
 /* ---- TextEdit (textedit.c). The TERec lives in guest memory; a TEHandle
  * dereferences to it, so the guest reads teLength/selStart/hText directly. ---- */

@@ -182,8 +182,9 @@ static int do_read(uint32_t pb){
     }
     o->pos = pos + n;
     m68k_w32(pb + PB_IOACTCOUNT, n);
-    if(trace()) fprintf(stderr, "[File] Read %s%s req=%u got=%u pos=%u/%u\n",
-                        f->name, o->rsrc ? " (rsrc)" : "", req, n, o->pos, len);
+    if(trace()) fprintf(stderr, "[File] Read %s%s req=%u got=%u pos=%u/%u buf=%08x%s\n",
+                        f->name, o->rsrc ? " (rsrc)" : "", req, n, o->pos, len, buf,
+                        (buf + n > M.memsize) ? "  !! buffer outside guest memory" : "");
     /* Short of the request means end of file, and the count still stands. */
     int err = (n < req) ? EOFERR : NOERR;
     fail(pb, err);
@@ -421,4 +422,88 @@ int fs_dispatch(uint16_t w){
         fail(pb, PARAMERR);        /* say "I did not do this" rather than "fine" */
         return 1;
     }
+}
+
+/* ---- opening a document's resource fork -----------------------------------
+ *
+ * A stack carries its own resources, and HyperCard opens them with OpenRFPerm
+ * before it reads a single card. The fork is a self-contained little database,
+ * so it is parsed here once and handed to the Resource Manager rather than
+ * being read a piece at a time through the File Manager.
+ *
+ * Layout (Inside Macintosh I-128): a 16-byte header gives the offsets of the
+ * data area and the map; the map holds a type list, each type naming a
+ * reference list, and each reference giving an id and an offset into the data
+ * area, where the resource is preceded by its 4-byte length. */
+static uint32_t rd32(const uint8_t *b, uint32_t o){
+    return ((uint32_t)b[o]<<24)|((uint32_t)b[o+1]<<16)|((uint32_t)b[o+2]<<8)|b[o+3];
+}
+static uint32_t rd16(const uint8_t *b, uint32_t o){ return ((uint32_t)b[o]<<8)|b[o+1]; }
+
+static void parse_resfork(int refnum, const uint8_t *b, uint32_t n){
+    if(n < 16) return;
+    uint32_t dataOff = rd32(b,0), mapOff = rd32(b,4);
+    uint32_t dataLen = rd32(b,8), mapLen = rd32(b,12);
+    if(mapOff + 30 > n || mapOff + mapLen > n || dataOff > n) return;
+
+    uint32_t typeListOff = mapOff + rd16(b, mapOff + 24);
+    if(typeListOff + 2 > n) return;
+    int nTypes = (int)rd16(b, typeListOff) + 1;
+    int added = 0;
+
+    for(int t = 0; t < nTypes; t++){
+        uint32_t te = typeListOff + 2 + (uint32_t)t * 8;
+        if(te + 8 > n) break;
+        char type[5];
+        for(int k = 0; k < 4; k++) type[k] = (char)b[te + k];
+        type[4] = 0;
+        int nRefs = (int)rd16(b, te + 4) + 1;
+        uint32_t refList = typeListOff + rd16(b, te + 6);
+        for(int r = 0; r < nRefs; r++){
+            uint32_t re = refList + (uint32_t)r * 12;
+            if(re + 12 > n) break;
+            int id = (int)(int16_t)rd16(b, re);
+            uint32_t off = rd32(b, re + 4) & 0x00FFFFFFu;   /* attrs in the top byte */
+            uint32_t d = dataOff + off;
+            if(d + 4 > n) continue;
+            uint32_t len = rd32(b, d);
+            if(d + 4 + len > n || len > dataLen) continue;
+            res_add_file(refnum, type, id, b + d + 4, (int)len);
+            added++;
+        }
+    }
+    if(trace()) fprintf(stderr, "[File] resource fork: %d resources in %d type(s)\n",
+                        added, nTypes);
+}
+
+/* Open a file's resource fork by name and make it the current resource file.
+ * Returns a refNum, or -1 if there is no such file. */
+int fs_open_resfork(uint32_t namePtr){
+    char name[NAMEMAX];
+    pstr(namePtr, name, sizeof name);
+    int idx = find_file(name);
+    if(idx < 0){ if(trace()) fprintf(stderr, "[File] OpenRF '%s' -> fnfErr\n", name);
+                 M.d[0] = (uint32_t)FNFERR; return -1; }
+    FSFile *f = &g_file[idx];
+
+    /* Each fork is parsed once; re-opening the same one just selects it. */
+    static int done[MAXFILES];
+    int refnum = idx + 2;                     /* 1 is the application */
+    if(!done[idx]){
+        done[idx] = 1;
+        if(f->rlen){
+            FILE *fp = fopen(f->rpath, "rb");
+            if(fp){
+                uint8_t *buf = malloc(f->rlen);   /* kept: the map points into it */
+                if(buf && fread(buf, 1, f->rlen, fp) == f->rlen)
+                    parse_resfork(refnum, buf, f->rlen);
+                fclose(fp);
+            }
+        }
+    }
+    res_use_file(refnum);
+    if(trace()) fprintf(stderr, "[File] OpenRF '%s' -> refNum %d (%u bytes)\n",
+                        f->name, refnum, f->rlen);
+    M.d[0] = NOERR;
+    return refnum;
 }
