@@ -113,6 +113,12 @@ static uint32_t via_jump_table(uint32_t addr) {
     return jt_map[off / 2];
 }
 
+uint32_t g_watch_addr = MR_WATCH_OFF;
+void mr_watch_hit(uint32_t addr, uint32_t val){
+    fprintf(stderr, "[watch] %06x <- %08x  in %06x (called from %06x)\n",
+            addr, val, g_last_call, g_prev_call);
+}
+
 volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
 
 /* Reported by a lifted prologue handed an address inside its own body that is

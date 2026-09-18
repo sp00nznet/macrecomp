@@ -262,7 +262,9 @@ static const char *app_name(void){
     return (e && *e) ? e : "Application";
 }
 
-void toolbox_init(void){ qd_init(); heap_init(); lowmem_init(); g_inited=1; }
+void toolbox_init(void){ qd_init(); heap_init(); lowmem_init(); g_inited=1;
+    { const char *e = getenv("MRWATCHADDR");
+      g_watch_addr = e ? (uint32_t)strtoul(e,0,16) : MR_WATCH_OFF; } }
 
 /* ---- PICT v1 decode + blit (DrawPicture) ---- */
 static uint32_t unpackbits_row(uint32_t p, uint8_t *out, int rowbytes){
@@ -525,7 +527,16 @@ void m68k_trap(uint16_t raw){
     case 0xA9B4: /*SystemTask*/ break;
     case 0xA86F: /*OpenPort*/ { uint32_t p=pop32(); if(p){ bitmap_screen(p+2);
         Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,screen_base(),QD_W/8,0,0,QD_W,QD_H);} } break;
-    case 0xA875: /*SetPortBits*/ { uint32_t bm=pop32(); if(bm) set_target_from_bitmap(bm);
+    case 0xA875: /*SetPortBits*/ { uint32_t bm=pop32();
+        if(bm){
+            /* SetPortBits *copies* the BitMap into thePort->portBits; it does
+             * not merely redirect where drawing lands. Retargeting alone leaves
+             * the port's own baseAddr in guest memory stale, and a title that
+             * reads it back to check which buffer it is drawing into concludes
+             * it is somewhere it is not. HyperCard asserts exactly that. */
+            if(g_cur_port) for(int i=0;i<14;i++) m68k_w8(g_cur_port+2+i, m68k_r8(bm+i));
+            set_target_from_bitmap(bm);
+        }
         if(getenv("MRGFX")&&bm) fprintf(stderr,"[gfx] SetPortBits base=%x rb=%d\n",m68k_r32(bm),m68k_r16(bm+4)&0x3fff); } break;
     case 0xA9B8: /*GetPattern*/ { (void)pop16(); uint32_t h=heap_alloc(4),p=heap_alloc(8);
         for(int i=0;i<8;i++) M.mem[p+i]=0xFF; if(h)m68k_w32(h,p); ret32(h); } break;

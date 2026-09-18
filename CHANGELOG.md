@@ -47,6 +47,20 @@ All notable changes to this project are documented here. Format follows
   an unknown handle copies what the caller asked for -- safe, because this heap
   never reuses a block. A wiped handle is indistinguishable further on from data
   that was garbage all along, which is the worst kind of bug to chase.
+- **`SetPortBits` retargeted drawing without updating the port.** The real trap
+  *copies* the BitMap into `thePort->portBits`; this one only pointed QuickDraw
+  at the new buffer and left the port's own `baseAddr` in guest memory stale. A
+  title that reads it back to check which buffer it is drawing into then decides
+  it is somewhere it is not. HyperCard asserts exactly that, which is what
+  `Unexpected error 123452` was. Copying the 14-byte BitMap into the current
+  port takes HyperCard from **1096 to 6803 Toolbox calls** with no error at all.
+- **A write watchpoint**, `MRWATCHADDR=<hex>`, reporting every longword write to
+  one guest address with the function that made it. "Who set this global?" is
+  otherwise unanswerable when nothing stores to it at a literal offset -- the
+  write arrives through a register, a struct copy, or a Toolbox trap writing
+  through a caller's pointer, which is how this bug was finally cornered. Note
+  that "off" is `0xFFFFFFFF`, not 0: writes to address 0 are real and worth
+  seeing.
 - **`InitGraf` was a no-op that threw the QuickDraw globals away.** The pointer
   it is handed is the *last* field of `QDGlobals` (`thePort`), so `screenBits`,
   the five standard patterns, the arrow cursor and `randSeed` all sit at fixed
