@@ -141,105 +141,70 @@ prints the whole shadow stack at every trap; `MRMAXLOOPS=<n>` (with
 MSYS2 toolchain here is broken -- missing `libxxhash.dll` -- so a native
 backtrace was never available, and these stand in for it.
 
-### File Manager (landed) -- and why the catalog still is not on screen
+### Where HyperCard actually is now
+
+**It opens and reads its Home stack.** From a cold start it walks the disc's
+catalogue by index, finds `Home` among the 279 files, opens the data fork,
+opens the resource fork, reads the `STAK` block (6144 bytes, in two reads) and
+the `MAST` index (512 bytes) -- and the bytes land in guest memory byte-exact,
+checked against the file.
+
+Then it asks its block cache for **block id 0**, which no stack contains, and
+reports `Unexpected error 1250` in a dialog of its own with its own text. The
+zero is the whole question: it read a block id of zero out of the stack header
+where a real id belongs. `fn_20_04d6` calls `fn_20_0b06` to fetch the block,
+gets a record whose id field is zero, and raises 1250.
+
+Ruled out, by measurement rather than assumption:
+
+- The File Manager. Reads are byte-exact in guest memory; `STAK` and `MAST`
+  headers were compared against the file.
+- Unimplemented instructions. A whole run executes none.
+- Missing traps at the point of failure. Five remain unimplemented anywhere in a
+  run -- `GetDeviceList`, `GetNextDevice`, `GetCursor`, `SetStdProcs`,
+  `ScriptUtil` -- and none is called near it.
+- Frame and stack corruption. `MRWATCH` reports no A6 clobber and no stack
+  pointer outside the address space.
+
+So the next thread is another silent mis-lift or a HAL routine returning the
+wrong shape, somewhere between reading the `STAK` header and reading a block id
+out of it. The instruments to use are already here: `MRSTACK` for the frame
+chain, and a probe in the generated function once the suspect is named.
+
+### What "on screen and navigable" still needs
+
+1. **The block machinery above.** No card can be built without it.
+2. **Card rendering.** `BMAP` blocks are compressed 1-bit images; `PAGE`/`CARD`
+   blocks hold the objects. QuickDraw already draws what it is given.
+3. **Real events.** The headless harness answers `GetNextEvent` with nulls, so
+   nothing can be clicked. Navigation needs mouse events fed in, and the button
+   scripts behind them need **SANE** (88 sites, still stubbed) for HyperTalk
+   arithmetic.
+
+### File Manager (landed)
 
 `runtime/files.c` serves a title's own media read-only: `Open`/`OpenRF`,
 `Read`, `Close`, `GetEOF`, `Get`/`SetFPos`, `GetFileInfo`, `GetVol`/`SetVol`,
-and the `FSDispatch`/`HFSDispatch` selectors worth answering. These are **OS
-traps** -- A0 is the parameter block, D0 the result -- so nothing is read off
-the Pascal stack. Forks are read from the host on demand: one CD-ROM's forks are
-422 MB and a stack is read a few hundred bytes at a time.
+and the `FSDispatch`/`HFSDispatch` selectors worth answering -- `PBGetCatInfo`
+by index, by name and by directory id, `PBGetWDInfo`, `PBGetFCBInfo`. These are
+**OS traps**: A0 is the parameter block, D0 the result.
 
 `extract_resources.py --forks DIR` writes every file's two forks plus a
-`files.json` index, which is what a File Manager HAL needs and what extracting
-one application's resources does not give you.
+`files.json` index. Forks are then read from the host on demand -- this disc's
+are 422 MB.
 
-Writes report `wrPermErr` rather than succeeding silently. A title told it
-cannot write can say so; one told "fine" loses data.
+A document's **resource fork** is parsed on `OpenRFPerm` and handed to the
+Resource Manager, which searches the current file first and the application
+second. Writes report `wrPermErr` rather than succeeding silently.
 
-Covered by `examples/hal_selftest.c`: open, `fnfErr` for a missing file, a read
-from the mark, `GetFPos`, an absolute `SetFPos`, a read across the end that
-delivers a short count *and* `eofErr`, `wrPermErr` on write, and `rfNumErr`
-after close. 79% -> **80%** of call sites.
+Two answers that each cost a full debugging session, recorded so they are not
+rediscovered:
 
-**HyperCard still does not open a stack**, and the reason is no longer the File
-Manager. Traced through:
-
-```
-fn_3_00e4 -> fn_21_1e1e -> fn_21_1bec -> Open glue -> _Open
-```
-
-`fn_21_1bec` does `movea.l $8(a6),a4` and then addresses everything as
-`-$4ae(a4)` -- the parameter block is a local in its *caller's* frame, and the
-caller passes its own `a6`. The pointer arriving at `_Open` is `0xFFFFFB52`,
-which is exactly `-0x4ae` with **a4 = 0**: the caller's frame pointer was null.
-A5 is correct (checked), `link`/`unlk` lift correctly (checked), and the
-call does enter `fn_21_1e1e` at its start, where `link.w a6,#$f304` runs. So a
-valid frame pointer is becoming 0 somewhere between that `link` and the
-`move.l a6,-(a7)` that passes it. That is the next thread, and it is a lifter or
-calling-convention question rather than a HAL one.
-
-Two other leads, both probably the same fault: `m68k_jump: no function at
-000000` fires repeatedly through this sequence (a return address or function
-pointer reading as null), and `no function at cbfe0000` -- one bit from the
-`0xCAFE0000` return sentinel -- suggests arithmetic landing on a return address.
-
-Deliberately **not** built: the Finder startup handshake (an `AppParmHandle`
-block that `CountAppFiles`/`GetAppFiles` walk to learn which document to open).
-It was written, then removed unused -- HyperCard 1.2.2 never calls
-`GetAppParms`, so it was forty lines answering a question nothing asked. The
-layout is recorded in a comment for whenever a title does ask.
-
-Two other things the run settled:
-
-- The framebuffer is blank, but `SetPBits` at call 280 has pointed the port at
-  an offscreen bitmap, so that is consistent rather than contradictory. Nothing
-  is expected on screen yet.
-- Whole-run unimplemented *instructions* are now **zero**. The two that used to
-  fire were `rol.b`/`ror.b`, which the lifter did not lower; both now do.
-
-`FSDispatch` and `FP68K` (SANE) are still stubs, and HyperCard cannot open its
-Home stack without the File Manager, so a rendered card is still not the next
-thing to expect -- but TextEdit is what the program is asking for right now.
-
-Two loader details worth recording, because both cost time to rediscover and
-neither is in the repo:
-
-- **Segment bytes must be copied into guest memory at the load base**, not just
-  registered as functions. Lifted code is C, but PC-relative *data* reads --
-  string literals, constant tables, the resource type handed to `Get1Resource`
-  -- still go through `M.mem`. Without the copy they read zero, and HyperCard
-  quits during init after a `Get1Resource` with a null type. That one mistake
-  cost 280 of the 306 calls.
-- **Segment load bases must not overlap.** The range search added for entry
-  dispatch assumes function extents are disjoint, so the spacing has to exceed
-  the largest segment (28 KB here), not the average one.
-
-Entry dispatch is covered by `examples/entry_dispatch_test.c` (`ctest`), which
-checks entry at a start, at two interior boundaries, into the second of two
-adjacent functions, through `m68k_call` with the stack balanced across it, and
-the two failure modes: an interior address that is not an instruction boundary,
-and an address no function owns.
-
-Two things worth knowing before touching the boundary code again -- both still
-true, because entry dispatch resolves *where a jump lands*, not *what the sweep
-believes is code*:
-
-- **The linear sweep in `main()` drifts.** It disassembles each segment once
-  from offset 0, so any embedded data knocks it out of alignment and everything
-  after decodes as plausible-looking nonsense until it resynchronises. It found
-  46 `jmp d(pc,Xn)` "switch dispatches" across the 21 segments; *none* survive
-  into generated code, because none lie at a real instruction boundary. Branch
-  discovery rests on this sweep, so treat anything it alone reports as a lead,
-  not a fact.
-- **Verify an instruction against its function's real start.** The same bytes
-  decode differently from different alignments, and both readings look like
-  ordinary code. A site here was read as a switch dispatch, then as data, and
-  was in fact neither -- only disassembling from the enclosing function's start
-  settled it.
-
-Still stubs regardless: `FSDispatch` and `FP68K` (SANE). HyperCard cannot open
-its Home stack without the File Manager, so no card can render until that lands.
+- **`PBGetCatInfo` must fill in the parent directory id.** HyperCard climbs
+  towards the root and, without it, asks for the same directory forever --
+  712,029 calls in one run.
+- **Standard File must answer.** A title that cannot find its document asks the
+  user; with no answer it asks forever. `MRDOC` names the document.
 
 ## Next: the HyperCard trap gap
 

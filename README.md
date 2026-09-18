@@ -160,8 +160,10 @@ in [ROADMAP.md](ROADMAP.md).
 HyperCard 1.2.2 recompiled to C and running headless: its own dialog, its own
 text and button, drawn through the QuickDraw HAL into a 512x342 1-bit
 framebuffer. By this point it has walked the disc's catalogue, found the `Home`
-stack among the 279 files, opened it and read it — and is reporting what it
-makes of the contents. Real output, not a mockup.
+stack among the 279 files, opened both its forks and read the stack header and
+master index — and is reporting what it makes of the contents. Real output, not
+a mockup. [ROADMAP.md](ROADMAP.md) has what error 1250 is and what still stands
+between here and a card on screen.
 
 ## Using macrecomp in your project
 
