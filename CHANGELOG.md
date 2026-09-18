@@ -6,6 +6,21 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mul` and `div` never applied their source operand's addressing side
+  effects** -- and this is the one that had HyperCard stuck. `divu.w (a7)+,d0`
+  read its divisor and left A7 exactly where it was, so the *next* instruction,
+  `add.l (a7)+,d0`, added the divisor instead of the table base it wanted. That
+  is HyperCard's block-record hash: `(id folded) mod count * 12 + table`. It was
+  returning a wild pointer, every write through it was dropped, the block cache
+  never populated, and the title reported `Unexpected error 1250`.
+
+  With the postincrement emitted, HyperCard goes from 386 Toolbox calls to
+  **625**, from 3 file reads to **15**, and the error is gone. It now reads the
+  stack's `MAST` index, `LIST`, `PAGE`, `BKGD` and `BMAP` blocks -- the actual
+  card structures -- and reaches `ShowWindow`.
+
 ### Added
 
 - The lifter check grew to **32 cases**, covering the arithmetic and addressing

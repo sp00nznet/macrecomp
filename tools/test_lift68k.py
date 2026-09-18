@@ -263,6 +263,20 @@ CASES = [
         setup="M.a[0]=0x1000; m68k_w8(0x1000,0x00);",
         checks=[("m68k_r8(0x1000)", 0xFF)],
     ),
+
+    dict(
+        # A divisor fetched through (a7)+ must actually pop. Without the
+        # postincrement the division is right and every later stack read is one
+        # slot out -- which is how a hash lookup ended up adding its own divisor
+        # instead of the table base and returning a wild pointer.
+        name="divu.w (a0)+ pops its divisor",
+        code=b"\x80\xd8" + RTS,          # divu.w (a0)+,d0
+        setup=("M.a[0]=0x1000; m68k_w16(0x1000,0x0004);"
+               " m68k_w16(0x1002,0xBEEF); M.d[0]=17;"),
+        # 17/4 = 4 remainder 1, and A0 must have advanced past the divisor.
+        checks=[("(uint16_t)M.d[0]", 4), ("M.d[0] >> 16", 1),
+                ("M.a[0]", 0x1002)],
+    ),
 ]
 
 HARNESS = r"""

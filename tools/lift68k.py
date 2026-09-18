@@ -332,8 +332,14 @@ def emit_inner(ins, targets):
     elif base=="swap":
         n=dnum(ops[0]); C.append(f"M.d[{n}]=(M.d[{n}]>>16)|(M.d[{n}]<<16); fl_logic(M.d[{n}],4);")
     elif base in ("muls","mulu"):
+        # The source is a full effective address, so its predecrement and
+        # postincrement have to be emitted like anywhere else. Leaving them out
+        # reads the right value and then leaves the register unmoved, so the
+        # *next* instruction addressing through it reads the wrong slot.
         a=P(ops[0],2); n=dnum(ops[1]); cast="(int32_t)(int16_t)" if base=="muls" else "(uint32_t)(uint16_t)"
+        C.extend(a.pre)
         C.append(f"SET_DL({n},(uint32_t)({cast}({a.r})*{cast}M.d[{n}])); fl_logic(M.d[{n}],4);")
+        C.extend(a.post)
     elif base=="link":
         n=anum(ops[0]); d=P(ops[1]).imm
         C.append(f"SP-=4; m68k_w32(SP,M.a[{n}]); M.a[{n}]=SP; SP+=(int32_t)(int16_t)0x{d&0xffff:x};")
@@ -385,7 +391,12 @@ def emit_inner(ins, targets):
             C.append(f"{wf}({n},{fn}({rf}({n}),M.d[{m2}]&63,{sz}));")
         else: C.append(unimpl(ins))
     elif base in ("divu","divs"):
+        # Same rule as mul: the divisor is an effective address and its
+        # side effects are part of the instruction. `divu.w (a7)+,d0` pops
+        # its divisor; without the pop, everything the caller reads off the
+        # stack afterwards is one slot out.
         a=P(ops[0],2); n=dnum(ops[1])
+        C.extend(a.pre)
         if base=="divs":
             C.append(f"{{ int16_t _s=(int16_t)({a.r}); if(_s){{ int32_t _dd=(int32_t)M.d[{n}];"
                      f" uint32_t _q=(uint32_t)(_dd/_s), _r=(uint32_t)(_dd%_s);"
@@ -394,6 +405,7 @@ def emit_inner(ins, targets):
             C.append(f"{{ uint16_t _s=(uint16_t)({a.r}); if(_s){{ uint32_t _dd=M.d[{n}];"
                      f" uint32_t _q=_dd/_s, _r=_dd%_s;"
                      f" SET_DL({n},((_r&0xffff)<<16)|(_q&0xffff)); fl_logic(_q,2); }} }}")
+        C.extend(a.post)
     elif base in ("btst","bset","bclr","bchg"):
         a=P(ops[0]); b=P(ops[1] if len(ops)>1 else ops[0])
         onreg = re.fullmatch(r"\s*d\d\s*",(ops[1] if len(ops)>1 else "")) is not None
