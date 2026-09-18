@@ -289,6 +289,42 @@ CASES = [
         # the fourth table byte.
         checks=[("(uint8_t)M.d[1]", 0xDD)],
     ),
+    # ---- unsigned comparison: what a tokeniser's character ranges rest on ----
+    dict(
+        name="cmp.b sets carry when the destination borrows",
+        code=b"\x70\x03" + b"\x0c\x00\x00\x05" + b"\x55\xc1" + RTS,
+        setup="",
+        # 3 - 5 borrows, so C is set and scs writes 0xff.
+        checks=[("(uint8_t)M.d[1]", 0xFF), ("M.c", 1)],
+    ),
+    dict(
+        name="cmp.b clears carry when it does not borrow",
+        code=b"\x70\x05" + b"\x0c\x00\x00\x03" + b"\x55\xc1" + RTS,
+        setup="",
+        checks=[("(uint8_t)M.d[1]", 0x00), ("M.c", 0)],
+    ),
+    dict(
+        # 0x7f vs 0x80 is the case that separates signed from unsigned: as
+        # signed it is positive vs negative, as unsigned it borrows. A character
+        # range check reads it unsigned.
+        name="cmp.b compares 0x7f against 0x80 unsigned",
+        code=b"\x70\x7f" + b"\x0c\x00\x00\x80" + b"\x55\xc1" + RTS,
+        setup="",
+        checks=[("(uint8_t)M.d[1]", 0xFF), ("M.c", 1)],
+    ),
+    dict(
+        name="shi is true only when strictly above, unsigned",
+        code=b"\x70\x05" + b"\x0c\x00\x00\x05" + b"\x52\xc1" + RTS,
+        setup="",
+        # equal is not "above": C clear but Z set, so hi is false.
+        checks=[("(uint8_t)M.d[1]", 0x00)],
+    ),
+    dict(
+        name="sls is true when equal",
+        code=b"\x70\x05" + b"\x0c\x00\x00\x05" + b"\x53\xc1" + RTS,
+        setup="",
+        checks=[("(uint8_t)M.d[1]", 0xFF)],
+    ),
 ]
 
 HARNESS = r"""
