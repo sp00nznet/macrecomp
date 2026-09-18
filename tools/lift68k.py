@@ -512,6 +512,18 @@ def lift_function(code, seg, start, end):
     return name,"\n".join(L),start,end
 
 
+def looks_like_prologue(code, off):
+    """True if `off` opens the way a compiled 68k function almost always does.
+
+    `link aN,#d` sets up the frame; `movem.l <regs>,-(a7)` saves the callee-saved
+    registers. Either is a strong signal, and neither is a plausible reading of
+    the middle of some other instruction."""
+    if off + 2 > len(code):
+        return False
+    w = (code[off] << 8) | code[off + 1]
+    return 0x4E50 <= w <= 0x4E57 or w == 0x48E7
+
+
 def confirm_starts(code, offs, trusted):
     """Drop candidate starts that do not land on an instruction boundary.
 
@@ -539,7 +551,12 @@ def confirm_starts(code, offs, trusted):
         for ins in md.disasm(code[cur:edge], cur):
             if ins.address > o: break
             bounds.add(ins.address)
-        if o in bounds:
+        # The reference decode is itself only as good as the bytes it crossed:
+        # a string constant embedded in the body drifts it, and then a genuine
+        # routine after that data looks mid-instruction. So a candidate that
+        # opens with a prologue is kept anyway -- that is the stronger evidence,
+        # and it is what resynchronises the decode.
+        if o in bounds or looks_like_prologue(code, o):
             good.append(o); cur = o
     return good
 

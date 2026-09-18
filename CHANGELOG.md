@@ -6,8 +6,28 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Resource enumeration**: `GetIndResource`/`Get1IxResource`,
+  `CountTypes`/`Count1Types`, `GetIndType`/`Get1IxType`, `GetResInfo`,
+  `SetResInfo`, `LoadResource`. HyperCard walks its own resources by index at
+  startup and stops if it cannot; the table the Resource Manager already serves
+  is the answer, so these are cheap. 80% -> **81%** of call sites.
+- `ParamText` logs its `^0`-`^3` substitutions under `MRTRACE`. A title that
+  reports an error by number puts the number there, so it is often the only
+  place the program says what went wrong.
+
 ### Fixed
 
+- **A start after embedded data is kept even when the decode disagrees.** The
+  boundary filter below was too strict on its own: a string constant inside a
+  function body drifts the reference decode, and a genuine routine *after* that
+  data then looks mid-instruction. A candidate opening with a prologue
+  (`link aN,#d` or `movem.l <regs>,-(a7)`) is now kept regardless -- that is the
+  stronger evidence, and it is what resynchronises the decode. 99 dropped starts
+  become 73, recovering 26 real functions. One of them, `fn_3_1e20`, sits behind
+  the string `"23846"` and is HyperCard's WildTalk resource loader; it now runs
+  and loads `WTLK 1-4`.
 - **Function starts that sat *inside* an instruction** - 99 of them across
   HyperCard's 21 segments. Starts come partly from a linear sweep that drifts
   over embedded data, and the two existing filters (odd addresses, non-68000

@@ -67,11 +67,14 @@ static m68k_fn ft_containing(uint32_t addr) {
     return r ? r->fn : 0;
 }
 
+volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
+
 /* Reported by a lifted prologue handed an address inside its own body that is
  * not an instruction boundary: either data being executed, or a decode that
  * drifted. Distinct from "no function at", which means no owner at all. */
 void m68k_entry_miss(uint32_t entry) {
-    fprintf(stderr, "m68k: %06x is inside a function but not an instruction boundary\n", entry);
+    fprintf(stderr, "m68k: %06x is inside a function but not an instruction boundary "
+                    "(last %06x, before %06x)\n", entry, g_last_call, g_prev_call);
 }
 
 /* low-memory Ticks (0x16A): the system bumps it 60/sec; games busy-wait on it.
@@ -88,7 +91,6 @@ static void bump_ticks(void){
  * functions return via RTS and never touch it, so we discard it ourselves. */
 #define RET_SENTINEL 0xCAFE0000u
 
-volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
 volatile uint32_t g_shadow[512]; volatile int g_shadow_sp = 0;   /* shadow call stack */
 
 /* MRMAXCALLS=<n>: stop after n lifted transfers and print the shadow stack.

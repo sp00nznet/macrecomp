@@ -100,7 +100,7 @@ cost of a title is a number before any of it is lifted:
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered |
 |---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** |
-| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **80%** |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **81%** |
 
 ```bash
 python tools/scan_traps.py work/unpacked --coverage runtime/toolbox.c

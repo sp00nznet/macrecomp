@@ -522,6 +522,44 @@ void m68k_trap(uint16_t raw){
     case 0xA9BA: /*GetString*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x53545220u,id)); } break; /*'STR '*/
     case 0xA9A5: /*SizeRsrc*/ { uint32_t h=pop32(); uint32_t sz=0;
         for(int i=0;i<g_nres;i++) if(g_res[i].handle==h){ sz=g_res[i].len; break; } ret32(sz); } break;
+
+    /* Resource enumeration. HyperCard walks its own resources by index at
+     * startup and stops if it cannot; these are cheap because the table the
+     * Resource Manager already serves is the answer. Index is 1-based. */
+    case 0xA99D: /*GetIndResource*/ case 0xA80E: { /*Get1IxResource*/
+        int16_t ix=pop16(); uint32_t ty=pop32();
+        char want[5]; type4(ty,want); int n=0; uint32_t h=0;
+        for(int i=0;i<g_nres;i++) if(strcmp(g_res[i].type,want)==0)
+            if(++n==ix){ h=res_get(ty, g_res[i].id); break; }
+        m68k_w32(SP,h); } break;
+    case 0xA99E: /*CountTypes*/ case 0xA81C: { /*Count1Types*/
+        int n=0;
+        for(int i=0;i<g_nres;i++){ int seen=0;
+            for(int j=0;j<i;j++) if(strcmp(g_res[i].type,g_res[j].type)==0){ seen=1; break; }
+            if(!seen) n++; }
+        ret16((uint16_t)n); } break;
+    case 0xA99F: /*GetIndType*/ case 0xA80F: { /*Get1IxType*/
+        int16_t ix=pop16(); uint32_t tp=pop32(); int n=0;
+        for(int i=0;i<g_nres;i++){ int seen=0;
+            for(int j=0;j<i;j++) if(strcmp(g_res[i].type,g_res[j].type)==0){ seen=1; break; }
+            if(seen) continue;
+            if(++n==ix && tp){ const char *t=g_res[i].type;
+                for(int k=0;k<4;k++) m68k_w8(tp+k, t[k]?(uint8_t)t[k]:' '); break; } }
+        } break;
+    /* GetResInfo(theResource; VAR theID; VAR theType; VAR name). The name is
+     * whatever res_add was told, which is nothing today -- so it reports an
+     * empty Str255 rather than leaving the caller's buffer untouched, which
+     * would read as a stale name. */
+    case 0xA9A8: { /*GetResInfo*/
+        uint32_t nm=pop32(), tp=pop32(), idp=pop32(), h=pop32();
+        for(int i=0;i<g_nres;i++) if(g_res[i].handle==h && h){
+            if(idp) m68k_w16(idp,(uint16_t)g_res[i].id);
+            if(tp){ const char *t=g_res[i].type;
+                for(int k=0;k<4;k++) m68k_w8(tp+k, t[k]?(uint8_t)t[k]:' '); }
+            break; }
+        if(nm) m68k_w8(nm,0); } break;
+    case 0xA9A9: /*SetResInfo*/ (void)pop32(); (void)pop32(); (void)pop16(); break;
+    case 0xA9A2: /*LoadResource*/ (void)pop32(); break;  /* already in memory */
     case 0xA99C: /*CountResources*/ case 0xA80D: /*Count1Resources*/ {
         uint32_t ty=pop32(); char want[5]; type4(ty,want); int n=0;
         for(int i=0;i<g_nres;i++) if(strcmp(g_res[i].type,want)==0) n++;
@@ -660,6 +698,15 @@ void m68k_trap(uint16_t raw){
     case 0xA827: /*HideDialogItem*/ { int16_t n=pop16(); uint32_t d=pop32(); dlg_hide_item(d,n,1); } break;
     case 0xA828: /*ShowDialogItem*/ { int16_t n=pop16(); uint32_t d=pop32(); dlg_hide_item(d,n,0); } break;
     case 0xA98B: /*ParamText*/ { uint32_t p3=pop32(),p2=pop32(),p1=pop32(),p0=pop32();
+        /* ^0-^3 are what an alert actually says. A title that reports an error
+         * by number puts the number here, so this is often the only place the
+         * program tells you what went wrong. */
+        if(getenv("MRTRACE")){
+            uint32_t ps[4]={p0,p1,p2,p3};
+            for(int k=0;k<4;k++){ if(!ps[k]) continue; int l=m68k_r8(ps[k]); if(!l) continue;
+                fprintf(stderr,"  ParamText ^%d = \"", k);
+                for(int i=0;i<l&&i<80;i++) fputc((int)m68k_r8(ps[k]+1+i), stderr);
+                fprintf(stderr,"\"\n"); } }
         dlg_param_text(p0,p1,p2,p3); } break;
     case 0xA984: /*FindDialogItem*/ { uint32_t pt=pop32(), d=pop32(); int ph,pv;
         pt_unpack(pt,&ph,&pv); ret16((uint16_t)(int16_t)dlg_find_item(d,ph,pv)); } break;

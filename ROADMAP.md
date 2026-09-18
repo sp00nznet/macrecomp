@@ -8,7 +8,7 @@ by guess — the numbers come from `scan_traps.py --coverage`.
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered | Traps covered |
 |---|---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** | 69% |
-| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **80%** | 54% |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **81%** | 56% |
 
 Reproduce either row:
 
