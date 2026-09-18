@@ -183,8 +183,22 @@ void m68k_call(uint32_t addr) {
      * and every local the caller addresses as -n(a6) afterwards is wrong. That
      * is invisible at the call site and disastrous a few frames later, so the
      * check names the callee that did it rather than the victim. */
-    uint32_t a6_in = M.a[6];
+    /* The stack pointer leaving the address space is the first domino: every
+     * later read returns 0 and every write is dropped, so the damage shows up
+     * as null pointers far from the cause. Report the first time only. */
+    if (g_watch_a6 && SP >= M.memsize) {
+        static int said = 0;
+        if (!said++) fprintf(stderr, "m68k: SP %08x is outside the %u-byte address space "
+                                     "on entry to %06x (last %06x, before %06x)\n",
+                             SP, M.memsize, addr, g_last_call, g_prev_call);
+    }
+    uint32_t a6_in = M.a[6], sp_in = SP;
     fn(entry);
+    if (g_watch_a6 && SP >= M.memsize && sp_in < M.memsize) {
+        static int said2 = 0;
+        if (!said2++) fprintf(stderr, "m68k: %06x left SP at %08x (was %08x) -- "
+                                      "outside the address space\n", addr, SP, sp_in);
+    }
     if (g_watch_a6 && M.a[6] != a6_in)
         fprintf(stderr, "m68k: %06x returned with A6 %06x -> %06x (entry %06x, SP %06x -> %06x)\n",
                 addr, a6_in, M.a[6], entry, after, SP);

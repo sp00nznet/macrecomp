@@ -155,13 +155,13 @@ in [ROADMAP.md](ROADMAP.md).
 
 ## Screenshot
 
-![HyperCard 1.2.2, recompiled, drawing a modal dialog](docs/img/hypercard-first-render.png)
+![HyperCard 1.2.2, recompiled, reporting a stack error in its own dialog](docs/img/hypercard-stack-error.png)
 
-HyperCard 1.2.2 recompiled to C and running headless: its own modal dialog
-frame, drop shadow and all, drawn through the QuickDraw HAL into a 512x342
-1-bit framebuffer. The box is empty because the title asks for `DLOG 0`, which
-its resource fork does not contain -- an early-exit path, not the Home stack.
-Real output from the run described above, not a mockup.
+HyperCard 1.2.2 recompiled to C and running headless: its own dialog, its own
+text and button, drawn through the QuickDraw HAL into a 512x342 1-bit
+framebuffer. By this point it has walked the disc's catalogue, found the `Home`
+stack among the 279 files, opened it and read it — and is reporting what it
+makes of the contents. Real output, not a mockup.
 
 ## Using macrecomp in your project
 

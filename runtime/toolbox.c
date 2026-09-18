@@ -256,6 +256,10 @@ static void logtrap(uint16_t w){
 
 void m68k_trap(uint16_t raw){
     uint16_t w = norm(raw);
+    if(getenv("MRPROBE") && w==0xA9C8){
+        uint32_t a5=M.a[5];
+        fprintf(stderr,"  PROBE WTLK globals: %08x %08x %08x %08x  (a5=%08x)\n",
+            m68k_r32(a5-0x2bb4), m68k_r32(a5-0x2ba8), m68k_r32(a5-0x2bac), m68k_r32(a5-0x2bb0), a5); }
     if(getenv("MRTRACE")){ static long n=0;
         fprintf(stderr,"[%5ld] $%04X  from %06x  depth %d\n", n++, w, g_last_call, g_shadow_sp);
         /* MRSTACK: the whole shadow stack per trap. The last trap before a hang
@@ -513,6 +517,55 @@ void m68k_trap(uint16_t raw){
     case 0xA060: case 0xA260: /*FSDispatch / HFSDispatch*/
         fs_dispatch(w); break;
 
+    /* ---- Standard File (Pack3) ----
+     * When a title cannot find a document it asks the user, and with no answer
+     * it asks forever -- HyperCard spins here once its search for the Home
+     * stack comes up short. There is no file dialog to put up in a headless
+     * recomp, so the answer comes from MRDOC, which names the document to open;
+     * without it the reply is "cancelled", which is also a real answer.
+     *
+     * SFReply: good(1), copy(1), fType(4), vRefNum(2), version(2), fName(Str255).
+     * Auto-pop: the glue pops its own return address, pushes the selector
+     * under it and traps, so the address comes off first and goes back on at
+     * the end -- for the m68k_rts the lifter emits after an auto-pop trap. */
+    case 0xA9EA: { /*Pack3 -- Standard File*/
+        uint32_t ra = pop32();
+        int16_t sel = (int16_t)pop16();
+        uint32_t reply = 0;
+        switch(sel){
+        case 2: /*SFGetFile(where,prompt,filter,numTypes,typeList,hook,reply)*/
+            reply=pop32(); (void)pop32(); (void)pop32(); (void)pop16();
+            (void)pop32(); (void)pop32(); (void)pop32(); break;
+        case 4: /*SFPGetFile: +dlgID, filterProc*/
+            reply=pop32(); (void)pop32(); (void)pop32(); (void)pop32();
+            (void)pop32(); (void)pop16(); (void)pop32(); (void)pop32();
+            (void)pop32(); break;
+        case 1: /*SFPutFile*/
+            reply=pop32(); (void)pop32(); (void)pop32(); (void)pop32();
+            (void)pop32(); break;
+        case 3: /*SFPPutFile*/
+            reply=pop32(); (void)pop32(); (void)pop32(); (void)pop32();
+            (void)pop32(); (void)pop32(); (void)pop32(); break;
+        default: break;
+        }
+        const char *doc = getenv("MRDOC");
+        int give = (sel==2 || sel==4) && doc && *doc;
+        if(reply){
+            m68k_w8 (reply+0, (uint8_t)(give?1:0));     /* good */
+            m68k_w8 (reply+1, 0);                        /* copy */
+            for(int i=0;i<4;i++) m68k_w8(reply+2+i, (uint8_t)"STAK"[i]);
+            m68k_w16(reply+6, (uint16_t)(-1));           /* vRefNum */
+            m68k_w16(reply+8, 0);                        /* version */
+            int l = give ? (int)strlen(doc) : 0; if(l>63) l=63;
+            m68k_w8(reply+10, (uint8_t)l);
+            for(int i=0;i<l;i++) m68k_w8(reply+11+i, (uint8_t)doc[i]);
+        }
+        if(getenv("MRFILE"))
+            fprintf(stderr,"[File] StandardFile selector %d -> %s\n",
+                    sel, give ? doc : "cancelled");
+        SP -= 4; m68k_w32(SP, ra);          /* put the return address back */
+    } break;
+
     /* ---- Resource Manager (serve the app's own resources) ---- */
     case 0xA9A0: /*GetResource*/ case 0xA81F: /*Get1Resource*/ {
         int16_t id=pop16(); uint32_t ty=pop32(); m68k_w32(SP, res_get(ty,id)); } break;
@@ -664,7 +717,12 @@ void m68k_trap(uint16_t raw){
         uint32_t dlogh=res_get(0x444C4F47u,id);     /* 'DLOG' */
         uint32_t dlog=dlogh?m68k_r32(dlogh):0;
         Rect bounds; int ditl_id=0;
-        if(dlog){ bounds=rd_rect(dlog); ditl_id=(int16_t)m68k_r16(dlog+20); }
+        /* DLOG: boundsRect(8), procID(2), visible(2), goAwayFlag(2), refCon(4),
+         * itemsID(2) at 18, then the title as a Str255. Reading the id at 20
+         * lands on the title's length byte and first character instead -- for
+         * HyperCard's "Error" dialog that reads as item list 1349, which does
+         * not exist, so the dialog comes up empty. */
+        if(dlog){ bounds=rd_rect(dlog); ditl_id=(int16_t)m68k_r16(dlog+18); }
         else rect_set(&bounds,100,80,412,262);
         uint32_t ditlh=res_get(0x4449544Cu,ditl_id); /* 'DITL' */
         ret32(make_dialog(dstor, ditlh?m68k_r32(ditlh):0, &bounds));

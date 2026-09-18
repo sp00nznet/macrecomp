@@ -6,7 +6,54 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`dbra` loops were all no-ops - 563 of them.** `DBcc` loops while its
+  condition is **false**, the opposite of `Bcc`. `dbra` is the assembler's
+  spelling of `dbf`, so looking "ra" up in the branch table yielded "always
+  true" and made the loop body unreachable: every counted loop in HyperCard --
+  block copies, string walks, table scans -- did nothing at all, and the
+  counter never moved. This is the single largest correctness fix so far.
+- **`move`/`movea` operand order.** The 68000 fetches the source, applying its
+  postincrement, *before* computing the destination address. Two idioms depend
+  on it exactly: the Pascal epilogue `move.l (a7)+,(a7)`, which lifts the return
+  address over the parameter, and the variadic glue's `movea.l (a7)+,a7`, which
+  loads a new stack pointer off the old stack. Emitting the increment afterwards
+  made the first a no-op -- so callers resumed four bytes low and read results
+  out of their own arguments -- and made the second add 4 to the stack pointer
+  it had just loaded, until SP walked out of the address space entirely.
+- **`cmpm` was unimplemented** (37 sites) - the memory-to-memory compare with
+  both operands postincrementing, i.e. the string-compare instruction. It sets
+  flags exactly like `cmp`. Without it HyperCard's check of whether the file it
+  opened really is the home stack never ran.
+- **Auto-pop package traps.** Bit 10 of a Toolbox trap means the dispatcher
+  returns to the address on the stack rather than to the instruction after the
+  trap; the package glue pops its return address, pushes the selector under it
+  and traps. The lifter now emits a return after such a trap, and Standard File
+  reads its arguments in that order. Previously the selector read as garbage and
+  execution ran on into the next glue entry.
+- **`GetNewDialog` read the item-list ID from the wrong offset.** `itemsID` sits
+  at offset 18 of a `DLOG`; reading at 20 lands on the title's length byte and
+  first character. HyperCard's error dialog asked for item list 1349 -- which
+  does not exist -- and so came up empty. It now shows its real text.
+
 ### Added
+
+- **HyperCard opens and reads the Home stack.** It walks the catalogue by index,
+  finds `Home` among the disc's stacks, opens it and reads it (1536, 4608 and
+  512 bytes). It then reports `Unexpected error 1250` in a legible dialog of its
+  own -- a specific diagnostic with `ParamText` substitution working, where
+  before the same dialog was empty and the error had no number.
+- **A directory model in the File Manager**: one volume (vRefNum -1) whose root
+  is the standard HFS root (dirID 2). `PBGetCatInfo` answers by index, by name,
+  and by directory id, and **fills in the parent directory id** -- without which
+  HyperCard climbs towards the root forever, 712,029 calls in one run.
+  `PBGetFCBInfo` reports what is open on a refNum, which HyperCard asks for
+  immediately after opening a stack.
+- **Standard File (`Pack3`)**, answered from `MRDOC`. A title that cannot find
+  its document asks the user, and with no answer it asks forever.
+- `MRWATCH=1` also reports when a callee leaves the stack pointer outside the
+  address space, naming the callee rather than the eventual victim.
 
 - **Resource enumeration**: `GetIndResource`/`Get1IxResource`,
   `CountTypes`/`Count1Types`, `GetIndType`/`Get1IxType`, `GetResInfo`,

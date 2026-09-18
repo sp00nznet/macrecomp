@@ -230,6 +230,105 @@ static int do_getfileinfo(uint32_t pb){
     return NOERR;
 }
 
+/* ---- one volume, one directory ----
+ * The media this serves is a flat list of files, so the catalogue model is the
+ * smallest one that is still truthful: a single volume (vRefNum -1) whose root
+ * directory is the standard HFS root (dirID 2) and holds every file. A title
+ * that walks the catalogue by index, or asks what directory it is in, gets a
+ * consistent answer rather than an error it has no path around.
+ * ponytail: no subdirectories. The disc has none; add a parent-ID column if a
+ * title's media does. */
+#define VREFNUM   (-1)
+#define ROOT_DIR    2
+#define PB_IODIRID   48     /* ioDirID / ioFlNum share this slot */
+#define PB_IODRNMFLS 52     /* files in a directory (ioDrNmFls) */
+#define PB_IOPARID  100     /* ioDrParID / ioFlParID: the enclosing directory */
+#define ROOT_PARENT   1     /* the root's parent, by HFS convention */
+#define ATTRIB_DIR 0x10
+
+static void put_pstr(uint32_t p, const char *s){
+    if(!p) return;
+    int l = (int)strlen(s); if(l > 31) l = 31;
+    m68k_w8(p, (uint8_t)l);
+    for(int i = 0; i < l; i++) m68k_w8(p + 1 + i, (uint8_t)s[i]);
+}
+
+/* PBGetCatInfo. ioFDirIndex selects the question:
+ *   > 0  the n'th entry of the directory
+ *   = 0  the file named by ioNamePtr
+ *   < 0  the directory named by ioDirID (name is an output here) */
+static int do_getcatinfo(uint32_t pb){
+    int di = (int16_t)m68k_r16(pb + PB_IOFDIRINDEX);
+    if(di < 0){
+        uint32_t dir = m68k_r32(pb + PB_IODIRID);
+        if(dir != ROOT_DIR && dir != 0){
+            if(trace()) fprintf(stderr, "[File] GetCatInfo dirID=%u -> fnfErr\n", dir);
+            fail(pb, FNFERR); return FNFERR;
+        }
+        put_pstr(m68k_r32(pb + PB_IONAMEPTR), "Untitled");
+        m68k_w16(pb + PB_IOVREFNUM, (uint16_t)VREFNUM);
+        m68k_w8 (pb + PB_IOFLATTRIB, ATTRIB_DIR);
+        m68k_w32(pb + PB_IODIRID, ROOT_DIR);
+        m68k_w16(pb + PB_IODRNMFLS, (uint16_t)g_nfile);
+        /* The parent id is what stops a caller walking up the tree. HyperCard
+         * climbs from wherever it is towards the root, and without this it asks
+         * for the same directory forever -- 712,029 times in one run before
+         * this line existed. */
+        m68k_w32(pb + PB_IOPARID, ROOT_PARENT);
+        if(trace()) fprintf(stderr, "[File] GetCatInfo root -> dirID %d, %d files\n",
+                            ROOT_DIR, g_nfile);
+        fail(pb, NOERR); return NOERR;
+    }
+    int r = do_getfileinfo(pb);
+    if(r == NOERR){                      /* a file, in the one directory there is */
+        m68k_w16(pb + PB_IOVREFNUM, (uint16_t)VREFNUM);
+        m68k_w8 (pb + PB_IOFLATTRIB, 0);
+        m68k_w32(pb + PB_IOPARID, ROOT_DIR);
+    }
+    return r;
+}
+
+/* PBGetFCBInfo: what is open on this refNum. HyperCard asks immediately after
+ * opening a stack, and a refusal there is as good as never having opened it.
+ * FCBPBRec fields (Inside Macintosh IV). */
+#define PB_IOFCBINDX   28
+#define PB_IOFCBFLNM   32
+#define PB_IOFCBFLAGS  36
+#define PB_IOFCBEOF    40
+#define PB_IOFCBPLEN   44
+#define PB_IOFCBCRPS   48
+#define PB_IOFCBVREF   52
+#define PB_IOFCBPARID  58
+
+static int do_getfcbinfo(uint32_t pb){
+    int indx = (int16_t)m68k_r16(pb + PB_IOFCBINDX);
+    FSOpen *o = 0;
+    if(indx <= 0) o = slot(pb);                 /* by refNum */
+    else {                                       /* the n'th open file */
+        int n = 0;
+        for(int i = 0; i < MAXOPEN; i++)
+            if(g_open[i].used && ++n == indx){
+                o = &g_open[i];
+                m68k_w16(pb + PB_IOREFNUM, (uint16_t)(i + 1));
+                break; }
+    }
+    if(!o){ fail(pb, RFNUMERR); return RFNUMERR; }
+    const FSFile *f = &g_file[o->idx];
+    uint32_t len = fork_len(f, o->rsrc);
+    put_pstr(m68k_r32(pb + PB_IONAMEPTR), f->name);
+    m68k_w32(pb + PB_IOFCBFLNM,  (uint32_t)(o->idx + 2));
+    m68k_w16(pb + PB_IOFCBFLAGS, (uint16_t)(o->rsrc ? 0x0200 : 0));  /* resource fork */
+    m68k_w32(pb + PB_IOFCBEOF,   len);
+    m68k_w32(pb + PB_IOFCBPLEN,  (len + 511) & ~511u);
+    m68k_w32(pb + PB_IOFCBCRPS,  o->pos);
+    m68k_w16(pb + PB_IOFCBVREF,  (uint16_t)VREFNUM);
+    m68k_w32(pb + PB_IOFCBPARID, ROOT_DIR);
+    if(trace()) fprintf(stderr, "[File] GetFCBInfo %s%s eof=%u pos=%u\n",
+                        f->name, o->rsrc ? " (rsrc)" : "", len, o->pos);
+    fail(pb, NOERR);
+    return NOERR;
+}
+
 /* Returns 1 if it handled the trap. */
 int fs_trap(uint16_t w){
     uint32_t pb = M.a[0];
@@ -307,13 +406,17 @@ int fs_dispatch(uint16_t w){
     if(trace()) fprintf(stderr, "[File] %s selector %d\n",
                         w == 0xA260 ? "HFSDispatch" : "FSDispatch", sel);
     switch(sel){
-    case 0x0009: /*PBGetCatInfo*/ return do_getfileinfo(pb) == NOERR;
+    case 0x0009: /*PBGetCatInfo*/ do_getcatinfo(pb); return 1;
     case 0x0007: /*PBGetWDInfo*/
     case 0x0001: /*PBOpenWD*/
-        m68k_w16(pb + PB_IOVREFNUM, (uint16_t)(-1));
+        /* Working directories collapse onto the one real directory: the volume
+         * reference and the root are the only answer there is. */
+        m68k_w16(pb + PB_IOVREFNUM, (uint16_t)VREFNUM);
+        m68k_w32(pb + PB_IODIRID, ROOT_DIR);
         fail(pb, NOERR); return 1;
     case 0x0002: /*PBCloseWD*/
         fail(pb, NOERR); return 1;
+    case 0x0008: /*PBGetFCBInfo*/ do_getfcbinfo(pb); return 1;
     default:
         fail(pb, PARAMERR);        /* say "I did not do this" rather than "fine" */
         return 1;

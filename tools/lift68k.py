@@ -235,14 +235,32 @@ def emit_inner(ins, targets):
         C.extend(a.pre); C.extend(b.pre); return a,b
 
     if base in ("move",):
-        r=two()
-        if r: a,b=r; C.append(f"{{ uint32_t _r={a.r}; {b.w('_r')} fl_logic(_r,{sz}); }}"); C.extend(a.post+b.post)
+        # Operand order matters when both operands touch the same address
+        # register. The 68000 fetches the source -- applying its postincrement
+        # -- and only then computes the destination address. The Pascal epilogue
+        # `move.l (a7)+,(a7)` depends on exactly that: it lifts the return
+        # address over the parameter, and A7 must already have moved when the
+        # destination is worked out. Emitting both increments at the end makes
+        # it a no-op that leaves the return address in place, and the caller
+        # then resumes four bytes low and reads its result out of the argument.
+        a,b=P(ops[0]),P(ops[1])
+        if a and b:
+            C.extend(a.pre)
+            mid=" ".join(list(a.post)+list(b.pre))
+            C.append(f"{{ uint32_t _r={a.r}; {mid} {b.w('_r')} fl_logic(_r,{sz}); }}")
+            C.extend(b.post)
         else: C.append(unimpl(ins))
     elif base=="movea":
+        # Same ordering rule as `move`, and it bites hardest here: the variadic
+        # glue ends `movea.l (a7)+,a7`, which loads a new stack pointer off the
+        # old stack. The postincrement belongs to the source fetch, so applying
+        # it after the write adds 4 to the register just loaded -- the stack
+        # pointer drifts and eventually leaves the address space entirely.
         a=P(ops[0]); n=P(ops[1],4).areg
         if a and n is not None:
             C.extend(a.pre); src=a.r if sz==4 else f"(uint32_t)(int32_t)(int16_t)({a.r})"
-            C.append(f"M.a[{n}]={src};"); C.extend(a.post)
+            post=" ".join(a.post)
+            C.append(f"{{ uint32_t _r={src}; {post} M.a[{n}]=_r; }}")
         else: C.append(unimpl(ins))
     elif base=="moveq":
         b=P(ops[1],4); C.append(f"{{ uint32_t _r=0x{P(ops[0]).imm&0xffffffff:x}u; {b.w('_r')} fl_logic(_r,4); }}")
@@ -275,7 +293,12 @@ def emit_inner(ins, targets):
             src=a.r if sz==4 else f"(uint32_t)(int32_t)(int16_t)({a.r})"
             C.extend(a.pre); C.append(f"M.a[{n}]{'+' if base=='adda' else '-'}={src};"); C.extend(a.post)
         else: C.append(unimpl(ins))
-    elif base in ("cmp","cmpi","cmpa"):
+    elif base in ("cmp","cmpi","cmpa","cmpm"):
+        # cmpm compares memory to memory with both operands postincrementing --
+        # the string-compare instruction. It sets flags exactly like cmp, so it
+        # belongs here; left out, every byte-by-byte name comparison in a title
+        # silently does nothing. HyperCard uses it to check whether the file it
+        # just opened really is the home stack.
         s2=4 if base=="cmpa" else sz; r=two(s2)
         if r: a,b=r; C.append(f"fl_cmp({a.r},{b.r},({b.r}-{a.r}),{s2});"); C.extend(a.post+b.post)
         else: C.append(unimpl(ins))
@@ -376,7 +399,16 @@ def emit_inner(ins, targets):
     elif re.fullmatch(r"b(hi|ls|cc|hs|cs|lo|ne|eq|vc|vs|pl|mi|ge|lt|gt|le)",base):
         t=btarget(ops[0]); C.append(f"if({CC[base[1:]]}){{ {brto(t,ins)} }}"); targets.add(t)
     elif base.startswith("db"):
-        cc=CC.get(base[2:],"0"); n=dnum(ops[0]); t=btarget(ops[1]); targets.add(t)
+        # DBcc loops while its condition is **false**, which is the opposite of
+        # Bcc. `dbra` is the assembler's spelling of `dbf` -- condition false --
+        # so it always decrements and branches until the counter reaches -1.
+        # Looking "ra" up in the branch table yields "always true", which makes
+        # `if(!cc)` unreachable and turns every counted loop in the program into
+        # a no-op: the body never runs and the counter never moves. 563 of
+        # HyperCard's loops were dead this way.
+        suffix=base[2:]
+        cc="0" if suffix in ("ra","f") else CC.get(suffix,"0")
+        n=dnum(ops[0]); t=btarget(ops[1]); targets.add(t)
         C.append(f"if(!{cc}){{ SET_DW({n},DW({n})-1); if((int16_t)DW({n})!=-1){{ {brto(t,ins)} }} }}")
     elif base.startswith("s") and base[1:] in CC:
         b=P(ops[0],1); C.extend(b.pre); C.append(b.w(f"({CC[base[1:]]}?0xff:0)")); C.extend(b.post)
@@ -495,7 +527,17 @@ def lift_function(code, seg, start, end):
             L.append(f" L{addr:x}:;"); emitted.add(addr)
             STAT["total"]+=1
             if len(b)>=2 and 0xA0<=b[0]<=0xAF:
-                STAT["traps"]+=1; L.append(f"  m68k_trap(0x{(b[0]<<8)|b[1]:04x});")
+                w=(b[0]<<8)|b[1]
+                STAT["traps"]+=1; L.append(f"  m68k_trap(0x{w:04x});")
+                # Auto-pop (bit 10 of a Toolbox trap): the dispatcher returns to
+                # the address on the stack instead of to the instruction after
+                # the trap. The package glue uses it -- it pops its return
+                # address, pushes the selector under it and traps -- so the trap
+                # *is* the return. Without this the lifted code runs on into
+                # whatever follows, which is the next glue entry.
+                if (w & 0xF800) == 0xA800 and (w & 0x0400):
+                    L.append("  m68k_rts(); return;   /* auto-pop trap returns */")
+                    last_term=True; continue
             else: L.append(f"  /* data {b.hex()} */")
             last_term=False; continue
         ins=it[1]
