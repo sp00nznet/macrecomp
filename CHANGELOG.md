@@ -59,6 +59,11 @@ All notable changes to this project are documented here. Format follows
   `SelectWindow`, `InvalRect`, `InvalRgn` and a new window now queue one, and it
   is delivered once per exposure -- cleared on delivery rather than on
   `BeginUpdate`, so a title that never calls `BeginUpdate` cannot spin on it.
+- **Windows had no `updateRgn`.** An update event is only half the story: told
+  to repaint, a Mac application asks `EmptyRgn(theWindow->updateRgn)` whether
+  there is anything to repaint, and a window with no update region at all
+  answers "no" and draws nothing. Windows now get a real region, marked dirty
+  wherever an update is queued and emptied by `EndUpdate`.
 - **The `WindowRecord`'s `visible` byte was never written.** Past the 108-byte
   GrafPort sit `windowKind`, `visible` and `hilited`; a window whose `visible`
   byte reads zero is one the title will not draw into, however complete the port

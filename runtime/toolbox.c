@@ -44,6 +44,25 @@ static uint32_t screen_base(void){
 static uint32_t g_front_win;   /* the one card window, for FindWindow */
 static int g_update_pending;   /* an updateEvt the app has not been given yet */
 static int g_peek_valid, g_peek_what, g_peek_msg, g_peek_h, g_peek_v;
+
+/* WindowRecord past the 108-byte GrafPort: windowKind(108,2), visible(110,1),
+ * hilited(111,1), goAwayFlag(112,1), spareFlag(113,1), strucRgn(114,4),
+ * contRgn(118,4), updateRgn(122,4). */
+#define WR_UPDATERGN 122
+static uint32_t rgn_alloc(void);
+static Rect rd_rect(uint32_t p);
+static void rgn_put(uint32_t h, const Rect *r);
+/* An update event is only half the story: having been told to repaint, a Mac
+ * application asks EmptyRgn(theWindow->updateRgn) whether there is anything to
+ * repaint, and a window with no update region at all answers "no" and draws
+ * nothing. So the region has to exist and has to say what is dirty. */
+static void win_dirty(uint32_t w, int dirty){
+    if(!w) return;
+    uint32_t rgn = m68k_r32(w + WR_UPDATERGN);
+    if(!rgn){ rgn = rgn_alloc(); if(!rgn) return; m68k_w32(w + WR_UPDATERGN, rgn); }
+    if(dirty){ Rect r = rd_rect(w + 16); rgn_put(rgn, &r); }      /* portRect */
+    else { Rect z = {0,0,0,0}; rgn_put(rgn, &z); }
+}
 static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
 /* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
 static void bitmap_screen(uint32_t bm){ m68k_w32(bm,screen_base()); m68k_w16(bm+4,QD_W/8);
@@ -588,6 +607,7 @@ void m68k_trap(uint16_t raw){
          * hilited(1). A window whose visible byte is left at zero is one the
          * title will not draw into, however complete the port is. */
         m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, visible?1:0); m68k_w8(w+111, 1);
+        win_dirty(w, 1);
         g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);                    /* Pascal result slot */
     } break;
@@ -596,12 +616,13 @@ void m68k_trap(uint16_t raw){
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect pr; rect_set(&pr,0,0,QD_H,QD_W); bitmap_screen(w+2); wr_rect(w+16,&pr);
         m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, 1); m68k_w8(w+111, 1);
+        win_dirty(w, 1);
         g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);
     } break;
     case 0xA910: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
     case 0xA914: /*DisposeWindow*/ { uint32_t w=pop32(); if(w==g_front_win) g_front_win=0; } break;
-    case 0xA916: /*HideWindow*/ case 0xA923: /*EndUpdate*/
+    case 0xA916: /*HideWindow*/
     case 0xA92A: /*ValidRect*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
     /* Anything that exposes window content owes the app an update event; there
      * is no real window server here to raise one. */
@@ -611,11 +632,14 @@ void m68k_trap(uint16_t raw){
      * the title is not drawing into. */
     case 0xA91F: /*SelectWindow*/ case 0xA915: /*ShowWindow*/ {
         uint32_t w = pop32();
-        if(w){ g_front_win = w; m68k_w8(w+110, 1); m68k_w8(w+111, 1); }
+        if(w){ g_front_win = w; m68k_w8(w+110, 1); m68k_w8(w+111, 1); win_dirty(w, 1); }
         g_update_pending = 1; } break;
     case 0xA928: /*InvalRect*/  case 0xA927: /*InvalRgn*/
-        (void)pop32(); g_update_pending = 1; break;
+        (void)pop32(); win_dirty(g_front_win, 1); g_update_pending = 1; break;
+    /* BeginUpdate leaves the region set: the app is about to ask whether there
+     * is anything to draw, and EndUpdate is where it stops being dirty. */
     case 0xA922: /*BeginUpdate*/ (void)pop32(); g_update_pending = 0; break;
+    case 0xA923: /*EndUpdate*/ { uint32_t w = pop32(); win_dirty(w, 0); } break;
     case 0xA924: /*FrontWindow*/ ret32(g_front_win); break;
     /* FindWindow is what turns a click into a destination. One full-screen card
      * window means the only distinction that matters is menu bar vs. content;
