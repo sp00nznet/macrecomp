@@ -8,6 +8,20 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **Partitioned Mac CD images** in `extract_resources.py`. A Mac CD-ROM is not a
+  bare HFS volume: it opens with an `ER` driver descriptor and an Apple
+  partition map, and the HFS volume sits at whatever block the `Apple_HFS`
+  entry names. `load_hfs` previously handled DiskCopy 4.2 and raw HFS only, so
+  a CD was read from offset 0 and parsed as garbage. Every CD-sourced title was
+  unreachable; this is the container layer, so the fix lands once for all of
+  them. `tools/test_extract_resources.py` covers the three containers.
+- **HyperCard 1.x identified as 1.2.2** (Apple, 1987-88), extracted from *The
+  Electronic Whole Earth Catalog* CD-ROM: 22 `CODE` segments, 326,088 bytes,
+  1,110 jump-table functions over 21 segments, 3,166 trap call sites across 418
+  distinct traps. That is byte-for-byte the fixture already in the coverage
+  table, so the corpus's "user-supplied CD" row is not a second HyperCard — it
+  is a name and a version number for the one being worked on.
+
 - **`tools/relocs.py` - THINK C far-model relocations.** An application built
   in the far model does not reach its globals through A5; it puts **absolute
   32-bit data offsets inline in the code** and ships `CREL`/`DREL` to say where

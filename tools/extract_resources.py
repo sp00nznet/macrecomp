@@ -23,12 +23,25 @@ HFS_800K = 819200
 
 
 def load_hfs(raw: bytes) -> bytes:
-    """Return the HFS volume bytes from a .dc42, or the input if already raw HFS."""
+    """Return the HFS volume bytes from a .dc42, a partitioned CD, or raw HFS."""
     # DiskCopy 4.2: 84-byte header; data-size field at offset 64 (big-endian).
     if len(raw) > DC42_HEADER + 512:
         data_size = struct.unpack(">I", raw[64:68])[0]
         if data_size in (409600, 819200, 1474560) and len(raw) >= DC42_HEADER + data_size:
             return raw[DC42_HEADER:DC42_HEADER + data_size]
+    # Mac CD-ROM: 'ER' driver descriptor, then a map of 'PM' entries at 0x200.
+    # The HFS volume is a partition inside it, not at offset 0.
+    if raw[:2] == b"ER":
+        n, i = 1, 0
+        while i < n:
+            b = raw[0x200 + i * 512:0x200 + (i + 1) * 512]
+            if b[:2] != b"PM":
+                break
+            n = struct.unpack(">I", b[4:8])[0]
+            start, blocks = struct.unpack(">II", b[8:16])
+            if b[48:80].split(bytes(1))[0] == b"Apple_HFS":
+                return raw[start * 512:(start + blocks) * 512]
+            i += 1
     return raw
 
 

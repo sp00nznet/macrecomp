@@ -52,7 +52,7 @@ instead of 8086 + DOS INTs.
 
 ```
   App (HFS resource fork: CODE 0..N + PICT/snd/ASND/MENU…)
-        │  ① extract     tools/extract_resources.py   (dc42/HFS → CODE + assets + inventory.json)
+        │  ① extract     tools/extract_resources.py   (dc42/HFS/CD → CODE + assets + inventory.json)
         ▼
   CODE segments + asset catalog
         │  ② disassemble  tools/disasm_code.py         (capstone M68K)
@@ -73,7 +73,7 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 
 | Component | What it does | State |
 |-----------|--------------|-------|
-| `extract_resources.py` | DiskCopy 4.2 / raw HFS → CODE segments, asset catalog, `inventory.json` | ✅ working |
+| `extract_resources.py` | DiskCopy 4.2 / raw HFS / partitioned Mac CD → CODE segments, asset catalog, `inventory.json` | ✅ working |
 | `disasm_code.py` | capstone-M68K disassembly, annotated with traps + A5 jump-table calls | ✅ working |
 | `scan_traps.py` | enumerate A-line (`$Axxx`) Toolbox traps; parse the CODE 0 jump table; `--coverage` scores them against the HAL | ✅ working (validated on Finder, Shufflepuck, HyperCard) |
 | `traps.json` | 1177 trap word↔name mappings (Inside Macintosh) for the two tools above | ✅ |

@@ -8,7 +8,7 @@ by guess — the numbers come from `scan_traps.py --coverage`.
 | Title | 68k | CODE segs | Distinct traps | Call sites | Sites covered | Traps covered |
 |---|---|---|---|---|---|---|
 | Shufflepuck Cafe (1988) | ~53 KB | 6 | 182 | 995 | **92%** | 69% |
-| HyperCard 1.x | 326 KB | 22 | 418 | 3166 | **76%** | 45% |
+| HyperCard 1.2.2 (1988) | 326 KB | 22 | 418 | 3166 | **77%** | 47% |
 
 Reproduce either row:
 
@@ -102,8 +102,9 @@ around it:
 ### Corpus
 
 Classic-Mac media is not redistributable, so the corpus lives outside the repo
-and the harness fetches or skips with a clear message. All of these are raw HFS
-`.img` that `extract_resources.py` already reads:
+and the harness fetches or skips with a clear message. All of these are images
+`extract_resources.py` already reads — raw HFS `.img`, DiskCopy 4.2, or a
+partitioned Mac CD:
 
 | Source | Contains | Why |
 |---|---|---|
@@ -111,7 +112,7 @@ and the harness fetches or skips with a clear message. All of these are raw HFS
 | `archive.org/details/HyperCardBootSystem7` | System 7.0.1 + HyperCard 2.4 | Second HyperCard generation. |
 | `archive.org/details/BMUGHyperCardStacks` (250 MB) | HyperCard 1.2.1 + BMUG PD-ROM stacks | Hundreds of stacks — the breadth corpus. |
 | `archive.org/details/HyperCardVol1`, `…Vol2` | System 7.5.3 + HyperCard 2.4 + stacks | Cross-check against the boot drives. |
-| user-supplied CD | HyperCard 1.x | The 1988 build; oldest and simplest. |
+| *The Electronic Whole Earth Catalog* CD (1988) | HyperCard **1.2.2** | The build already measured in the table above — identified, not a new fixture. |
 
 Four HyperCard builds across both major generations, which is what keeps the
 lifter and HAL from overfitting to one binary.
