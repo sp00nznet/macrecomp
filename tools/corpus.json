@@ -7,9 +7,9 @@
       "source": "The Electronic Whole Earth Catalog CD-ROM (Broderbund, 1988), converted from BIN/CUE",
       "note": "The 1988 build: oldest and simplest. A partitioned Mac CD, so it exercises the partition-map path in load_hfs.",
       "baseline": {
-        "sites_covered": 2570,
+        "sites_covered": 2572,
         "sites_total": 3166,
-        "distinct_covered": 232,
+        "distinct_covered": 234,
         "distinct_total": 418
       }
     },

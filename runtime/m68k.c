@@ -67,6 +67,52 @@ static m68k_fn ft_containing(uint32_t addr) {
     return r ? r->fn : 0;
 }
 
+/* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the
+ * decrypted jump table (a5 offset -> target code address). Stub until Phase 5. */
+/* Indexed by A5 offset in words: entries are 8 bytes apart but code calls
+ * entry+2, so word granularity covers both alignments.
+ *
+ * One capacity, one predicate, used by all three functions. They previously
+ * disagreed -- set accepted a5off < 8192 while call accepted a5off < 65536 --
+ * so a large jump table had its tail silently dropped on the way in and read
+ * back as zero, giving a null dispatch a long way from the cause. An entry that
+ * does not fit now says so.
+ *
+ * ponytail: a flat array. 32K words covers a 64 KB jump table, far past the
+ * 8880 bytes HyperCard ships; make it a hash if a title ever exceeds that. */
+#define JT_WORDS 32768
+static uint32_t jt_map[JT_WORDS];
+static int jt_ok(uint32_t a5off) { return a5off / 2 < JT_WORDS; }
+
+void m68k_jt_set(uint32_t a5off, uint32_t addr) {
+    if (jt_ok(a5off)) jt_map[a5off / 2] = addr;
+    else fprintf(stderr, "m68k_jt_set: A5+%x beyond the jump-table map\n", a5off);
+}
+void m68k_jt_call(uint32_t a5off) {
+    uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
+    if (addr) m68k_call(addr);
+    else fprintf(stderr, "m68k_jt_call: unmapped A5+%x\n", a5off);
+}
+void m68k_jt_jump(uint32_t a5off) {   /* tail jmp through the jump table */
+    uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
+    if (addr) m68k_jump(addr);
+    else fprintf(stderr, "m68k_jt_jump: unmapped A5+%x\n", a5off);
+}
+
+
+/* An address inside the A5 world's jump table is a routine, not a function
+ * start: the loader filled the table, and the entry says where the routine
+ * really is. Code normally gets there with `jsr d(a5)`, but a computed call can
+ * hand over the absolute address instead, and without this that reads as a call
+ * into nowhere. */
+static uint32_t via_jump_table(uint32_t addr) {
+    uint32_t a5 = M.a[5];
+    if (!a5 || addr <= a5) return 0;
+    uint32_t off = addr - a5;
+    if (!jt_ok(off)) return 0;
+    return jt_map[off / 2];
+}
+
 volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
 
 /* Reported by a lifted prologue handed an address inside its own body that is
@@ -169,6 +215,8 @@ void m68k_call(uint32_t addr) {
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
+    if (!fn) { uint32_t t = via_jump_table(addr);
+               if (t) { m68k_call(t); return; } }
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x (last %06x, before %06x, depth %d)\n",
                        addr, g_last_call, g_prev_call, g_shadow_sp); return; }
     if (addr != g_last_call) { g_prev_call = g_last_call; g_last_call = addr; }
@@ -224,41 +272,11 @@ void m68k_jump(uint32_t addr) {
     uint32_t entry = 0;
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
+    if (!fn) { uint32_t t = via_jump_table(addr);
+               if (t) { m68k_jump(t); return; } }
     if (!fn) { fprintf(stderr, "m68k_jump: no function at %06x (last %06x, before %06x, depth %d)\n",
                        addr, g_last_call, g_prev_call, g_shadow_sp); return; }
     fn(entry);
-}
-
-/* jump through the A5 jump table (jsr d(a5)). The loader fills jt_map from the
- * decrypted jump table (a5 offset -> target code address). Stub until Phase 5. */
-/* Indexed by A5 offset in words: entries are 8 bytes apart but code calls
- * entry+2, so word granularity covers both alignments.
- *
- * One capacity, one predicate, used by all three functions. They previously
- * disagreed -- set accepted a5off < 8192 while call accepted a5off < 65536 --
- * so a large jump table had its tail silently dropped on the way in and read
- * back as zero, giving a null dispatch a long way from the cause. An entry that
- * does not fit now says so.
- *
- * ponytail: a flat array. 32K words covers a 64 KB jump table, far past the
- * 8880 bytes HyperCard ships; make it a hash if a title ever exceeds that. */
-#define JT_WORDS 32768
-static uint32_t jt_map[JT_WORDS];
-static int jt_ok(uint32_t a5off) { return a5off / 2 < JT_WORDS; }
-
-void m68k_jt_set(uint32_t a5off, uint32_t addr) {
-    if (jt_ok(a5off)) jt_map[a5off / 2] = addr;
-    else fprintf(stderr, "m68k_jt_set: A5+%x beyond the jump-table map\n", a5off);
-}
-void m68k_jt_call(uint32_t a5off) {
-    uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
-    if (addr) m68k_call(addr);
-    else fprintf(stderr, "m68k_jt_call: unmapped A5+%x\n", a5off);
-}
-void m68k_jt_jump(uint32_t a5off) {   /* tail jmp through the jump table */
-    uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
-    if (addr) m68k_jump(addr);
-    else fprintf(stderr, "m68k_jt_jump: unmapped A5+%x\n", a5off);
 }
 
 void m68k_unimplemented(const char *what, uint32_t addr) {

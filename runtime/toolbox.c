@@ -50,9 +50,23 @@ static void heap_init(void){
 /* Bounds-checked against M.memsize as well as the heap end: the zero-fill below
  * touches M.mem directly, so an out-of-range block would run off the buffer
  * rather than being dropped the way m68k_w8 would drop it. */
+/* What is left, which is what FreeMem and friends should be reporting. */
+static uint32_t heap_free(void){
+    uint32_t top = heap_end < M.memsize ? heap_end : M.memsize;
+    return heap_ptr < top ? top - heap_ptr : 0;
+}
 static uint32_t heap_alloc(uint32_t sz){
     sz = (sz+3)&~3u;
-    if(!sz || sz > heap_end || heap_ptr > heap_end - sz || heap_ptr + sz > M.memsize) return 0;
+    if(!sz || sz > heap_end || heap_ptr > heap_end - sz || heap_ptr + sz > M.memsize){
+        /* Say so once. A title that cannot allocate puts up "out of memory"
+         * and stops, and without this there is nothing to connect that dialog
+         * to the heap actually running dry. */
+        static int said = 0;
+        if(!said++) fprintf(stderr, "m68k: heap exhausted asking for %u bytes "
+                                    "(%u of %u used)\n",
+                            sz, heap_ptr - 0x00800000u, heap_end - 0x00800000u);
+        return 0;
+    }
     uint32_t p = heap_ptr; heap_ptr += sz;
     memset(M.mem + p, 0, sz);
     return p;
@@ -655,6 +669,47 @@ void m68k_trap(uint16_t raw){
             }
             m68k_w8(dst + i/2, v);
         } } break;
+    /* ---- Toolbox Utilities: the handle copiers ----
+     * Register-based, like the Memory Manager: a title that asks for one of
+     * these and gets nothing reads garbage out of A0 and concludes it is out of
+     * memory, which is exactly the dialog HyperCard was putting up. */
+    case 0xA9E3: /*PtrToHand -- A0 = src, D0 = size; returns A0 = new handle*/ {
+        uint32_t src=M.a[0], n=M.d[0];
+        uint32_t np=heap_alloc(n?n:4), nh=heap_alloc(4);
+        if(!nh||!np){ M.a[0]=0; M.d[0]=(uint32_t)-108; break; }
+        for(uint32_t i=0;i<n;i++) m68k_w8(np+i, m68k_r8(src+i));
+        m68k_w32(nh,np); hsz_set(nh,n);
+        M.a[0]=nh; M.d[0]=0; } break;
+    case 0xA9E2: /*PtrToXHand -- A0 = src, A1 = existing handle, D0 = size*/ {
+        uint32_t src=M.a[0], h=M.a[1], n=M.d[0];
+        if(!h){ M.d[0]=(uint32_t)-109; break; }
+        uint32_t np=heap_alloc(n?n:4);
+        if(!np){ M.d[0]=(uint32_t)-108; break; }
+        for(uint32_t i=0;i<n;i++) m68k_w8(np+i, m68k_r8(src+i));
+        m68k_w32(h,np); hsz_set(h,n);
+        M.a[0]=h; M.d[0]=0; } break;
+    case 0xA9EF: /*PtrAndHand -- append D0 bytes at A0 to the handle in A1*/ {
+        uint32_t src=M.a[0], h=M.a[1], n=M.d[0];
+        if(!h){ M.d[0]=(uint32_t)-109; break; }
+        uint32_t have=hsz_get(h), op=m68k_r32(h);
+        uint32_t np=heap_alloc(have+n?have+n:4);
+        if(!np){ M.d[0]=(uint32_t)-108; break; }
+        for(uint32_t i=0;i<have;i++) m68k_w8(np+i, m68k_r8(op+i));
+        for(uint32_t i=0;i<n;i++)    m68k_w8(np+have+i, m68k_r8(src+i));
+        m68k_w32(h,np); hsz_set(h,have+n);
+        M.a[0]=h; M.d[0]=0; } break;
+    case 0xA9E4: /*HandAndHand -- append the handle in A0 to the one in A1*/ {
+        uint32_t sh=M.a[0], h=M.a[1];
+        if(!sh||!h){ M.d[0]=(uint32_t)-109; break; }
+        uint32_t n=hsz_get(sh), src=m68k_r32(sh);
+        uint32_t have=hsz_get(h), op=m68k_r32(h);
+        uint32_t np=heap_alloc(have+n?have+n:4);
+        if(!np){ M.d[0]=(uint32_t)-108; break; }
+        for(uint32_t i=0;i<have;i++) m68k_w8(np+i, m68k_r8(op+i));
+        for(uint32_t i=0;i<n;i++)    m68k_w8(np+have+i, m68k_r8(src+i));
+        m68k_w32(h,np); hsz_set(h,have+n);
+        M.a[0]=h; M.d[0]=0; } break;
+
     case 0xA9E1: /*HandToHand*/ {                        /* A0 = handle, in and out */
         uint32_t h=M.a[0];
         if(!h){ M.d[0]=(uint32_t)-109; break; }
@@ -919,9 +974,22 @@ void m68k_trap(uint16_t raw){
     } break;
     case 0xA834: /*SetFScaleDisable*/ case 0xA814: /*SetFractEnable*/
         (void)pop16(); break;              /* font scaling: one fixed-pitch face */
-    case 0xA01C: /*FreeMem*/ M.d[0]=0x00400000; break;
+    /* StackSpace: how much room is left before the stack would run into
+     * anything else. A recursion guard reads this and stops when it looks
+     * small, so an unimplemented one reads as a stack already full -- which is
+     * the "too much recursion" a title then reports. The floor is where this
+     * runtime is willing to let the stack grow to; everything below is
+     * low-memory globals. */
+    case 0xA065: /*StackSpace*/ {
+        const uint32_t floor = 0x00010000u;
+        M.d[0] = SP > floor ? SP - floor : 0; } break;
+    case 0xA01C: /*FreeMem*/ M.d[0]=heap_free(); break;
     case 0xA11A: /*GetZone*/ M.a[0]=0; M.d[0]=0; break;
-    case 0xA11D: /*MaxMem*/ case 0xA162: /*PurgeSpace*/ M.d[0]=0x00400000; break;
+    /* Report what is actually left rather than a flattering constant: a title
+     * that is told there is room and then cannot allocate has no way to cope,
+     * where one told the truth can trim its appetite. */
+    case 0xA11D: /*MaxMem*/ case 0xA162: /*PurgeSpace*/ case 0xA061: /*MaxBlock*/
+        M.d[0]=heap_free(); M.a[0]=heap_free(); break;
     case 0xA126: /*HandleZone*/ M.a[0]=0; M.d[0]=0; break;
     case 0xA128: /*RecoverHandle*/ M.d[0]=0; break;
     /* Feature probing. Code asks "does this trap exist?" by comparing its

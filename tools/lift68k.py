@@ -521,6 +521,15 @@ def lift_function(code, seg, start, end):
         else:
             stream.append(("ins",ins))
         pc+=ins.size
+        # Alignment padding after an unconditional transfer. The assembler pads
+        # to an even boundary with zero words after a jmp/bra/rts, and the next
+        # real instruction starts after them -- but a linear decode swallows the
+        # zeros into the instruction that follows and every boundary after that
+        # is wrong. Code reached only by a computed jump then has no label to
+        # enter at. Recorded as data so the address after it stays a boundary.
+        if ins.mnemonic.split(".")[0] in ("jmp","bra","rts","rte","rtr"):
+            while pc+1 < end and code[pc]==0 and code[pc+1]==0:
+                stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2
 
     # collect branch targets (emit side-effects) without disturbing coverage stats
     targets=set(); saved=dict(STAT)

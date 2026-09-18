@@ -6,7 +6,36 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **HyperCard runs HyperTalk.** From 386 Toolbox calls to **1021**: it opens the
+  Home stack, walks its `MAST` index, reads the `LIST`, `PAGE`, `BKGD` and
+  `BMAP` blocks, reaches `ShowWindow` on its card window, and executes the
+  stack's script -- far enough to report on a command's arguments by name.
+- **Handle copiers** `PtrToHand`, `PtrToXHand`, `PtrAndHand`, `HandAndHand`.
+  Register-based like the Memory Manager, so an unimplemented one leaves garbage
+  in A0 and the title reports *out of memory* -- which is the dialog HyperCard
+  was putting up.
+- **`StackSpace`**. A recursion guard reads it and stops when it looks small, so
+  an unimplemented one reads as a stack already full. HyperCard was reporting
+  *too much recursion* on a stack that was barely used.
+- **Calls that land inside the A5 jump table now resolve through it.** Code
+  normally arrives with `jsr d(a5)`, but a computed call hands over the absolute
+  address, which previously read as a call into nowhere. Worth 300 more calls on
+  its own.
+- `FreeMem`, `MaxMem`, `PurgeSpace` and `MaxBlock` report **what is actually
+  left** rather than a flattering constant, and the heap says so once when it
+  runs dry -- a title told there is room and then refused an allocation has no
+  way to cope.
+
 ### Fixed
+
+- **Alignment padding after an unconditional transfer.** An assembler pads to an
+  even boundary with zero words after `jmp`/`bra`/`rts`, and a linear decode
+  swallows them into the instruction that follows -- so every boundary after
+  that is wrong, and code reached only by a computed jump has no label to enter
+  at. The padding is now recorded as data so the address after it stays a
+  boundary.
 
 - **`mul` and `div` never applied their source operand's addressing side
   effects** -- and this is the one that had HyperCard stuck. `divu.w (a7)+,d0`
