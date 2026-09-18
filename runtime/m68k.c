@@ -274,6 +274,11 @@ void m68k_call(uint32_t addr) {
                if (t) { m68k_call(t); return; } }
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x (last %06x, before %06x, depth %d)\n",
                        addr, g_last_call, g_prev_call, g_shadow_sp); return; }
+    /* Saved and restored around the call: without the restore, "last function
+     * entered" stays pointing at whatever was called *deepest*, so every trap
+     * reported after a call returns names the wrong caller. That sends you
+     * reading a function that had nothing to do with it. */
+    uint32_t last_in = g_last_call, prev_in = g_prev_call;
     if (addr != g_last_call) { g_prev_call = g_last_call; g_last_call = addr; }
     bump_ticks();
     if (g_shadow_sp < 512) g_shadow[g_shadow_sp] = addr;
@@ -308,6 +313,7 @@ void m68k_call(uint32_t addr) {
     if (SP == after) SP += 4;                    /* C-style fn left it; discard */
     /* Pascal fn already popped it (and removed its args); SP is higher — leave it */
     if (g_shadow_sp > 0) g_shadow_sp--;
+    g_last_call = last_in; g_prev_call = prev_in;
 }
 
 /* rts: the only "return address" this recomp ever pushes is RET_SENTINEL (m68k_call).

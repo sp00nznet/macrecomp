@@ -42,6 +42,8 @@ static uint32_t screen_base(void){
     return g_screen_base;
 }
 static uint32_t g_front_win;   /* the one card window, for FindWindow */
+static int g_update_pending;   /* an updateEvt the app has not been given yet */
+static int g_peek_valid, g_peek_what, g_peek_msg, g_peek_h, g_peek_v;
 static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
 /* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
 static void bitmap_screen(uint32_t bm){ m68k_w32(bm,screen_base()); m68k_w16(bm+4,QD_W/8);
@@ -501,7 +503,8 @@ void m68k_trap(uint16_t raw){
     case 0xA8B8: /*EraseOval*/ { Rect r=rd_rect(pop32()); qd_fill_oval(&r,0); } break;
     case 0xA8B9: /*InvertOval*/ { Rect r=rd_rect(pop32()); qd_fill_oval(&r,1); } break;
     case 0xA8BB: /*FillOval*/  { (void)pop32(); Rect r=rd_rect(pop32()); qd_fill_oval(&r,1); } break;
-    case 0xA87B: /*ClipRect*/  { Rect r=rd_rect(pop32()); qd_set_clip(&r); } break;
+    case 0xA87B: /*ClipRect*/  { Rect r=rd_rect(pop32()); qd_set_clip(&r);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] ClipRect %d,%d,%d,%d\n",r.top,r.left,r.bottom,r.right); } break;
     case 0xA884: /*DrawString*/{ uint32_t s=pop32(); int len=m68k_r8(s); uint8_t buf[256];
         for(int i=0;i<len;i++) buf[i]=(uint8_t)m68k_r8(s+1+i); qd_draw_text(buf,len); } break;
     case 0xA883: /*DrawChar*/  { qd_draw_char(pop16()); } break;
@@ -512,11 +515,40 @@ void m68k_trap(uint16_t raw){
         m68k_w16(pt,v); m68k_w16(pt+2,h); } break;
     case 0xA974: /*Button*/ ret16(plat_button()?1:0); break;
     case 0xA973: /*StillDown*/ ret16(plat_button()?1:0); break;
+    /* EventAvail reports the next event and *leaves it in the queue*;
+     * GetNextEvent removes it. Sharing one implementation meant every peek ate
+     * an event, so a title that polls with EventAvail and then fetches with
+     * GetNextEvent -- which is the ordinary idiom, and what HyperCard does,
+     * five times more often than it fetches -- lost nearly all of them,
+     * mouse clicks included. One slot of pushback is enough to tell them
+     * apart. */
     case 0xA970: /*GetNextEvent*/ case 0xA971: /*EventAvail*/ {
         plat_present();                       /* reaching the event loop == booted */
         if(plat_quit_requested()) exit(0);
+        int peek = (w == 0xA971);
         uint32_t evp=pop32(); (void)pop16(); int what=0,msg=0,h=0,v=0;
-        plat_pump(); int got=plat_next_event(&what,&msg,&h,&v);
+        plat_pump();
+        int got;
+        if(g_peek_valid){
+            what=g_peek_what; msg=g_peek_msg; h=g_peek_h; v=g_peek_v; got=1;
+            if(!peek) g_peek_valid=0;
+        } else {
+            got = plat_next_event(&what,&msg,&h,&v);
+            if(got && peek){ g_peek_valid=1; g_peek_what=what; g_peek_msg=msg;
+                             g_peek_h=h; g_peek_v=v; }
+        }
+        /* A Mac application draws a window's contents only when handed an
+         * updateEvt, and nothing here raises one: the window gets shown and is
+         * then never painted, which looks exactly like a title that failed to
+         * draw. Deliver it once per exposure -- clearing on delivery rather
+         * than waiting for BeginUpdate means an app that never calls
+         * BeginUpdate cannot spin on it. */
+        if(!got && g_update_pending && g_front_win){
+            what = 6 /*updateEvt*/; msg = (int)g_front_win; got = 1;
+            if(!peek) g_update_pending = 0;   /* a peek must not consume it */
+            if(getenv("MRTRACE")) fprintf(stderr,"  updateEvt -> window %06x%s\n",
+                (unsigned)g_front_win, peek?" (peek)":"");
+        }
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
                  int mh,mv; plat_get_mouse(&mh,&mv); m68k_w16(evp+10,mv); m68k_w16(evp+12,mh);
                  m68k_w16(evp+14,0); }
@@ -544,7 +576,7 @@ void m68k_trap(uint16_t raw){
     /* ---- Window Manager (thin: return a real WindowRecord so the game can draw) ---- */
     case 0xA913: /*NewWindow*/ {
         uint32_t refcon=pop32(); (void)pop16(); uint32_t behind=pop32(); (void)behind;
-        (void)pop16(); (void)pop16(); uint32_t title=pop32(); (void)title;
+        (void)pop16(); int visible=(int16_t)pop16(); uint32_t title=pop32(); (void)title;
         uint32_t bounds=pop32(); uint32_t wstor=pop32();
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect br = bounds?rd_rect(bounds):(Rect){0,0,QD_H,QD_W};
@@ -552,21 +584,38 @@ void m68k_trap(uint16_t raw){
         bitmap_screen(w+2);                 /* GrafPort.portBits -> the screen */
         wr_rect(w+16, &pr);                 /* GrafPort.portRect */
         m68k_w32(w+0xFC, refcon);           /* WindowRecord.refCon (approx offset) */
-        g_front_win = w;
+        /* WindowRecord past the 108-byte GrafPort: windowKind(2), visible(1),
+         * hilited(1). A window whose visible byte is left at zero is one the
+         * title will not draw into, however complete the port is. */
+        m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, visible?1:0); m68k_w8(w+111, 1);
+        g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);                    /* Pascal result slot */
     } break;
     case 0xA9BD: /*GetNewWindow*/ {
         uint32_t behind=pop32(); (void)behind; uint32_t wstor=pop32(); (void)pop16();
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect pr; rect_set(&pr,0,0,QD_H,QD_W); bitmap_screen(w+2); wr_rect(w+16,&pr);
-        g_front_win = w;
+        m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, 1); m68k_w8(w+111, 1);
+        g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);
     } break;
     case 0xA910: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
     case 0xA914: /*DisposeWindow*/ { uint32_t w=pop32(); if(w==g_front_win) g_front_win=0; } break;
-    case 0xA91F: /*SelectWindow*/ case 0xA915: /*ShowWindow*/ case 0xA916: /*HideWindow*/
-    case 0xA922: /*BeginUpdate*/ case 0xA923: /*EndUpdate*/ case 0xA928: /*InvalRect*/
+    case 0xA916: /*HideWindow*/ case 0xA923: /*EndUpdate*/
     case 0xA92A: /*ValidRect*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
+    /* Anything that exposes window content owes the app an update event; there
+     * is no real window server here to raise one. */
+    /* Showing or selecting a window says which one is front far more reliably
+     * than "the last one created" -- a title makes several windows and shows
+     * the one it wants, so an update addressed to the newest can name a window
+     * the title is not drawing into. */
+    case 0xA91F: /*SelectWindow*/ case 0xA915: /*ShowWindow*/ {
+        uint32_t w = pop32();
+        if(w){ g_front_win = w; m68k_w8(w+110, 1); m68k_w8(w+111, 1); }
+        g_update_pending = 1; } break;
+    case 0xA928: /*InvalRect*/  case 0xA927: /*InvalRgn*/
+        (void)pop32(); g_update_pending = 1; break;
+    case 0xA922: /*BeginUpdate*/ (void)pop32(); g_update_pending = 0; break;
     case 0xA924: /*FrontWindow*/ ret32(g_front_win); break;
     /* FindWindow is what turns a click into a destination. One full-screen card
      * window means the only distinction that matters is menu bar vs. content;
@@ -961,7 +1010,8 @@ void m68k_trap(uint16_t raw){
     case 0xA8D4: /*EraseRgn*/ { Rect r=rgn_get(pop32()); qd_erase_rect(&r); } break;
     case 0xA8D5: /*InverRgn*/ { Rect r=rgn_get(pop32()); qd_invert_rect(&r); } break;
     case 0xA8D6: /*FillRgn*/ { (void)pop32(); Rect r=rgn_get(pop32()); qd_fill_rect(&r,1); } break;
-    case 0xA879: /*SetClip*/ { Rect r=rgn_get(pop32()); qd_set_clip(&r); } break;
+    case 0xA879: /*SetClip*/ { Rect r=rgn_get(pop32()); qd_set_clip(&r);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] SetClip %d,%d,%d,%d\n",r.top,r.left,r.bottom,r.right); } break;
     case 0xA87A: /*GetClip*/ { uint32_t h=pop32(); Rect r; qd_get_clip(&r); rgn_put(h,&r); } break;
     case 0xA8DA: /*OpenRgn*/ break;   /* region recording: the clip stands in */
     case 0xA8DB: /*CloseRgn*/ { uint32_t h=pop32(); Rect r; qd_get_clip(&r); rgn_put(h,&r); } break;

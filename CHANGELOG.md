@@ -47,6 +47,26 @@ All notable changes to this project are documented here. Format follows
   an unknown handle copies what the caller asked for -- safe, because this heap
   never reuses a block. A wiped handle is indistinguishable further on from data
   that was garbage all along, which is the worst kind of bug to chase.
+- **`EventAvail` was consuming events.** It shares an implementation with
+  `GetNextEvent`, but `EventAvail` reports the next event and *leaves it in the
+  queue*. Every peek ate an event, so a title that polls with `EventAvail` and
+  then fetches with `GetNextEvent` -- the ordinary idiom, and what HyperCard
+  does five times more often than it fetches -- lost nearly all of them, mouse
+  clicks included. One slot of pushback tells them apart.
+- **Nothing ever raised an `updateEvt`.** A Mac application paints a window's
+  contents only when handed one, so the window was shown and then never
+  painted, which looks exactly like a title that failed to draw. `ShowWindow`,
+  `SelectWindow`, `InvalRect`, `InvalRgn` and a new window now queue one, and it
+  is delivered once per exposure -- cleared on delivery rather than on
+  `BeginUpdate`, so a title that never calls `BeginUpdate` cannot spin on it.
+- **The `WindowRecord`'s `visible` byte was never written.** Past the 108-byte
+  GrafPort sit `windowKind`, `visible` and `hilited`; a window whose `visible`
+  byte reads zero is one the title will not draw into, however complete the port
+  is. Setting it is what finally got HyperCard to call `BeginUpdate` at all.
+- **`g_last_call` was not restored when a call returned**, so "last function
+  entered" stayed pointing at whatever was called deepest and every trap
+  reported after a return named the wrong caller. That sends you reading a
+  function with nothing to do with the trap, which cost real time here.
 - **`SetPortBits` retargeted drawing without updating the port.** The real trap
   *copies* the BitMap into `thePort->portBits`; this one only pointed QuickDraw
   at the new buffer and left the port's own `baseAddr` in guest memory stale. A

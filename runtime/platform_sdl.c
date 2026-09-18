@@ -2,9 +2,11 @@
  * Presents the 1-bit QuickDraw framebuffer (black on white) scaled up, and
  * turns SDL input into a tiny event queue the Event Manager shim reads. */
 #include "macrecomp/toolbox.h"
+#include "macrecomp/m68k.h"
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static SDL_Window   *win;
 static SDL_Renderer *ren;
@@ -53,8 +55,48 @@ static void shot(void){
     fclose(f);
 }
 
+/* MRBMSHOT=<hexbase>:<rowbytes>:<height>:<path> writes a 1-bit bitmap out of
+ * guest memory as a PGM. A title that draws its card into an offscreen buffer
+ * and never blits it leaves the screen blank, and a blank screen cannot tell
+ * you whether the drawing happened at all. This can. */
+static void bmshot(void){
+    const char *spec = getenv("MRBMSHOT");
+    if(!spec) return;
+    /* MRBMSHOT=scan: report the densest 4 KB blocks of the heap. "Nothing is on
+     * screen" and "nothing was drawn anywhere" look identical from the
+     * framebuffer; this tells them apart without guessing a buffer address. */
+    if(!strcmp(spec, "scan")){
+        static int done; if(done++) return;
+        struct { unsigned base, bits; } top[8] = {{0,0}};
+        for(unsigned a = 0x800000u; a + 4096 < M.memsize && a < 0x1000000u; a += 4096){
+            unsigned bits = 0;
+            for(unsigned k = 0; k < 4096; k++){
+                unsigned char c = M.mem[a+k];
+                while(c){ bits += c & 1; c >>= 1; } }
+            for(int i = 0; i < 8; i++) if(bits > top[i].bits){
+                for(int j = 7; j > i; j--) top[j] = top[j-1];
+                top[i].base = a; top[i].bits = bits; break; } }
+        fprintf(stderr, "[bmscan] densest 4K blocks (of 32768 bits):\n");
+        for(int i = 0; i < 8; i++) if(top[i].bits)
+            fprintf(stderr, "  %06x  %u bits set (%.1f%%)\n",
+                    top[i].base, top[i].bits, 100.0*top[i].bits/32768.0);
+        return;
+    }
+    unsigned base=0, rb=0, h=0; char path[256];
+    if(sscanf(spec, "%x:%u:%u:%255s", &base, &rb, &h, path) != 4) return;
+    if(!rb || !h || rb > 4096 || h > 4096) return;
+    FILE *f = fopen(path, "wb");
+    if(!f) return;
+    fprintf(f, "P5\n%u %u\n255\n", rb*8, h);
+    for(unsigned y=0;y<h;y++) for(unsigned x=0;x<rb*8u;x++){
+        unsigned a = base + y*rb + (x>>3);
+        int bit = a < M.memsize ? (M.mem[a] >> (7-(x&7))) & 1 : 0;
+        fputc(bit ? 0 : 255, f); }
+    fclose(f);
+}
+
 void plat_present(void){
-    shot();
+    shot(); bmshot();
     if(!tex) return;
     uint32_t *px; int pitch;
     SDL_LockTexture(tex, NULL, (void**)&px, &pitch);
