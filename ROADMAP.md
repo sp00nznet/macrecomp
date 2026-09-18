@@ -171,6 +171,40 @@ wrong shape, somewhere between reading the `STAK` header and reading a block id
 out of it. The instruments to use are already here: `MRSTACK` for the frame
 chain, and a probe in the generated function once the suspect is named.
 
+### Where it stops: the HyperTalk parser
+
+HyperCard opens the Home stack, reads its card blocks, shows a window, and then
+**compiles the stack's script** and fails with `Can't understand what's after
+"end"` -- `STR# 1002` string 53, raised at `seg9 + 0x3344` in `fn_9_3306`, a
+shared reporter that picks between errors 53 and 78 on a caller flag. The
+decision is made in the CODE 14 parser; CODE 9 only reports it.
+
+Established, so none of it needs redoing:
+
+- **The data is not at fault.** The script is 2228 bytes, CR-terminated,
+  NUL-terminated, with handlers `xy c b s startUp resume getHomeInfo
+  searchScript` and no `openStack`. All 27 file reads deliver exactly what was
+  asked, and the bytes were compared against the file in guest memory.
+- **The lifter is not at fault on that path.** 39 differential cases cover the
+  arithmetic, addressing modes, unsigned comparison and carry, PC-relative
+  indexed tables, the `move.b (a0)+,(a1)+` string copy, `movem`, `mul`/`div`,
+  shifts and rotates. All pass.
+- **The parser works on a compiled form, not the text** -- no pointer into the
+  script appears in its frame -- and it reaches its error routine through a
+  **function pointer**, so nothing calls it statically. Both facts defeat the
+  probing used everywhere else in this file.
+
+Two dead ends, recorded so they are not retried: hiding Home (`MRSKIP=Home`)
+does not let a catalogue stack be opened directly, because HyperCard errors on
+Home itself; and emptying Home's script gets *fewer* calls, not more, most
+likely because the `STAK` block carries a checksum at +0x0C.
+
+**The next technique is a differential against a second build.** If HyperCard
+2.4 compiles the same script correctly under this runtime, the difference
+localises the fault; if it fails identically, the fault is in the runtime and
+two traces bracket it. That image is already fetched and extracted (52 CODE
+segments), so the work is lifting it and giving it a loader.
+
 ### What "on screen and navigable" still needs
 
 1. **The block machinery above.** No card can be built without it.
