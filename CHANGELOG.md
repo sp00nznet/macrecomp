@@ -8,6 +8,21 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **1021 -> 2267 Toolbox calls.** `SetWTitle`, `MoveWindow`, `SizeWindow`,
+  `EqualRect`, `EmptyRect`, `GetCursor`, `GetWTitle`, `DeleteMenu`,
+  `SetStdProcs`, `SndNewChannel`, and the Colour QuickDraw device list, which
+  honestly reports no devices rather than something that cannot be walked.
+  Coverage 81% -> **83%**.
+- `StripAddress` as an explicit **no-op**. It exists because a 24-bit machine
+  kept flags in a pointer's top byte; masking on a 32-bit clean address space
+  would truncate every heap pointer above 16 MB, and this runtime's heap starts
+  at 8 MB.
+- A lifter case for `move.b d(pc,Xn)` -- the character-class table lookup a
+  tokeniser uses -- and the harness now copies the segment's own bytes into
+  guest memory, because PC-relative *data* reads go through `M.mem` and read
+  zero otherwise. The real loader has the same requirement; the check did not,
+  so it could not have tested this at all.
+
 - **HyperCard runs HyperTalk.** From 386 Toolbox calls to **1021**: it opens the
   Home stack, walks its `MAST` index, reads the `LIST`, `PAGE`, `BKGD` and
   `BMAP` blocks, reaches `ShowWindow` on its card window, and executes the

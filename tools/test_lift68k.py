@@ -277,6 +277,18 @@ CASES = [
         checks=[("(uint16_t)M.d[0]", 4), ("M.d[0] >> 16", 1),
                 ("M.a[0]", 0x1002)],
     ),
+    dict(
+        # A character-class table indexed off the program counter: the
+        # tokeniser idiom. The displacement capstone reports is already
+        # absolute within the segment, and the index is sign-extended.
+        name="move.b d(pc,Xn) reads a table in the code",
+        code=b"\x12\x3b\x00\x06" + RTS + b"\xaa\xbb\xcc\xdd",
+        setup="M.d[0]=1;",
+        # The instruction is 4 bytes, rts 2, so the table begins at offset 6 and
+        # capstone already reports the base as the absolute 8. Index 1 lands on
+        # the fourth table byte.
+        checks=[("(uint8_t)M.d[1]", 0xDD)],
+    ),
 ]
 
 HARNESS = r"""
@@ -295,6 +307,12 @@ static void check(const char *what, long got, long want){
 int main(void){
     M.memsize = 0x10000; M.mem = calloc(1, M.memsize);
     SP = 0x8000;
+    /* The segment's own bytes have to be in guest memory as well as lifted:
+     * PC-relative *data* reads -- constant tables, string literals -- go
+     * through M.mem at g_seg_base+offset, and read zero without this. The real
+     * loader has the same requirement. */
+    {   static const unsigned char seg[] = { @@CODEBYTES@@ };
+        for(size_t i = 0; i < sizeof seg; i++) M.mem[i] = seg[i]; }
     register_seg_1(0);
     @@SETUP@@
     m68k_call(0);
@@ -340,7 +358,10 @@ def run_case(cc, tmp, case):
                        for c in case["checks"])
     main_c = os.path.join(tmp, "main.c")
     with open(main_c, "w") as f:
-        f.write(HARNESS.replace("@@SETUP@@", case["setup"]).replace("@@CHECKS@@", checks))
+        codebytes = ",".join(str(x) for x in case["code"])
+        f.write(HARNESS.replace("@@SETUP@@", case["setup"])
+                       .replace("@@CHECKS@@", checks)
+                       .replace("@@CODEBYTES@@", codebytes))
 
     exe = os.path.join(tmp, "t.exe")
     r = subprocess.run([cc, "-I", os.path.join(ROOT, "include"), "-O1", "-o", exe,

@@ -456,6 +456,39 @@ void m68k_trap(uint16_t raw){
     case 0xA922: /*BeginUpdate*/ case 0xA923: /*EndUpdate*/ case 0xA928: /*InvalRect*/
     case 0xA92A: /*ValidRect*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
     case 0xA924: /*FrontWindow*/ ret32(0); break;
+    /* One full-screen port stands in for the window list, so a window's title
+     * and position are accepted and discarded rather than refused: a title that
+     * cannot set them has no way forward, and nothing here can show them. */
+    case 0xA91A: /*SetWTitle*/ (void)pop32(); (void)pop32(); break;
+    case 0xA91B: /*MoveWindow*/ (void)pop16(); (void)pop16(); (void)pop16(); (void)pop32(); break;
+    case 0xA91D: /*SizeWindow*/ (void)pop16(); (void)pop16(); (void)pop16(); (void)pop32(); break;
+    case 0xA8A6: /*EqualRect*/ { Rect b=rd_rect(pop32()), a=rd_rect(pop32());
+        ret16((uint16_t)(a.top==b.top && a.left==b.left &&
+                         a.bottom==b.bottom && a.right==b.right)); } break;
+    case 0xA9B9: /*GetCursor*/ { (void)pop16();
+        /* No cursor artwork is drawn, but the handle must be real: callers
+         * dereference it and pass it to SetCursor. */
+        uint32_t p2=heap_alloc(68), h=heap_alloc(4);
+        if(h) m68k_w32(h,p2); m68k_w32(SP,h); } break;
+    case 0xA8EA: /*SetStdProcs*/ (void)pop32(); break;   /* no custom drawing hooks */
+    case 0xA8AE: /*EmptyRect*/ { Rect r=rd_rect(pop32());
+        ret16((uint16_t)(r.right<=r.left || r.bottom<=r.top)); } break;
+    case 0xA919: /*GetWTitle*/ { uint32_t nm=pop32(); (void)pop32();
+        if(nm) m68k_w8(nm,0); } break;                  /* untitled: one port */
+    case 0xA936: /*DeleteMenu*/ (void)pop16(); break;
+    case 0xA807: /*SndNewChannel*/ (void)pop32(); (void)pop32(); (void)pop16();
+        (void)pop32(); ret16((uint16_t)(-201)); break;  /* notEnoughHardwareErr */
+    /* StripAddress is a **no-op here**, not a 24-bit mask. It exists because a
+     * 24-bit machine kept flags in a pointer's top byte; masking on a 32-bit
+     * clean address space would truncate every heap pointer above 16 MB, and
+     * this runtime's heap starts at 8 MB and runs to 30 MB. The address is
+     * already clean, so hand it straight back. */
+    case 0xA055: /*StripAddress*/ break;
+    /* Colour QuickDraw is not implemented, and a device list with no entries is
+     * the honest answer -- a null main device says "monochrome" rather than
+     * handing back something that cannot be walked. */
+    case 0xAA29: /*GetDeviceList*/ case 0xAA2A: /*GetMainDevice*/
+    case 0xAA2B: /*GetNextDevice*/ ret32(0); break;
 
     /* ---- Menu Manager (thin stubs; menu bar not drawn) ---- */
     case 0xA931: /*NewMenu*/ { uint32_t title=pop32(); (void)title; (void)pop16();
