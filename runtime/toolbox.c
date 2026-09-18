@@ -58,6 +58,10 @@ static uint32_t heap_alloc(uint32_t sz){
     return p;
 }
 
+/* Handle sizes are recorded next to the handle (see hsz_set below); resources
+ * need it too, so declare it here. */
+static void hsz_set(uint32_t h, uint32_t sz);
+
 /* ---- Resource Manager: serve the app's own extracted resources ---- */
 typedef struct { int file; char type[6]; int id; const uint8_t *data; int len; uint32_t handle; } Res;
 static Res g_res[6000]; static int g_nres;
@@ -93,6 +97,10 @@ static uint32_t res_get(uint32_t typelong, int id){
             if(!r->handle){                       /* lazy: copy into M.mem, make a handle */
                 uint32_t p=heap_alloc(r->len); for(int k=0;k<r->len;k++) M.mem[p+k]=r->data[k];
                 uint32_t h=heap_alloc(4); m68k_w32(h,p); r->handle=h;
+                /* A resource handle is a handle like any other: GetHandleSize
+                 * must answer for it. Without this it reports 0, and a caller
+                 * that asks how big a resource is concludes it is empty. */
+                hsz_set(h, (uint32_t)r->len);
             }
             if(getenv("MRTRACE")) fprintf(stderr, "  res '%s' %d (file %d) -> %06x\n",
                                           want, id, wantfile, r->handle);

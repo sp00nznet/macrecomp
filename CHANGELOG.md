@@ -8,6 +8,14 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- The lifter check grew to **32 cases**, covering the arithmetic and addressing
+  the stack-block decoder leans on: masking, indexed addressing with a
+  sign-extended word index, `mulu`/`divu` result placement, `btst` on a bit,
+  shifts by a register count, `movem` round-tripping through the stack, and
+  read-modify-write on memory. All pass, which is useful negative information:
+  the decode path's arithmetic is not where the remaining fault is.
+- **`exg`**, which was not lifted at all (4 sites) -- found by the check above.
+
 - **`tools/test_lift68k.py` - a differential self-check for the lifter**, run in
   CI. It lifts short 68k byte sequences whose effect is fixed by the processor
   manual, runs the generated C, and compares the machine state against what a
@@ -21,6 +29,8 @@ All notable changes to this project are documented here. Format follows
 Both of these were found by the new check within minutes of it working, which is
 the argument for it:
 
+- **Resource handles had no recorded size**, so `GetHandleSize` answered 0 for
+  every resource and a caller asking how big one is concluded it was empty.
 - **`moveq` did not sign-extend.** It carries an 8-bit immediate and extends it
   to 32 bits, so `moveq #-1,dN` -- how a routine spells "not found" or "end of
   list" -- was becoming **255**, and every caller comparing against -1 silently

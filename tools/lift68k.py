@@ -262,6 +262,13 @@ def emit_inner(ins, targets):
             post=" ".join(a.post)
             C.append(f"{{ uint32_t _r={src}; {post} M.a[{n}]=_r; }}")
         else: C.append(unimpl(ins))
+    elif base=="exg":
+        # Always a full 32-bit swap, whatever the registers are.
+        def _reg(tok):
+            m=re.fullmatch(r"([da])(\d)", norm_op(tok))
+            return f"M.{m.group(1)}[{m.group(2)}]" if m else None
+        x,y=_reg(ops[0]),_reg(ops[1])
+        C.append(f"{{ uint32_t _t={x}; {x}={y}; {y}=_t; }}" if x and y else unimpl(ins))
     elif base=="moveq":
         # moveq carries an 8-bit immediate and **sign-extends it to 32 bits**.
         # Taking it as unsigned turns the idiomatic `moveq #-1,dN` -- which

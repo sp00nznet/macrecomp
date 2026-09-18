@@ -133,6 +133,136 @@ CASES = [
         setup="",
         checks=[("M.d[0]", 0x56781234)],
     ),
+
+    # ---- second batch: the arithmetic the stack block decoder leans on -------
+    dict(
+        name="andi.l masks a longword",
+        code=b"\x70\xff" + b"\x02\x80\x00\x00\x00\x7f" + RTS,
+        setup="",
+        checks=[("M.d[0]", 0x7F)],
+    ),
+    dict(
+        name="or.b combines only the low byte",
+        code=b"\x70\xf0" + b"\x72\x0f" + b"\x80\x01" + RTS,
+        setup="",
+        # d0 = 0xFFFFFFF0, d1 = 0x0F: the byte becomes 0xFF, the rest is kept.
+        checks=[("(uint8_t)M.d[0]", 0xFF), ("M.d[0]", 0xFFFFFFFF)],
+    ),
+    dict(
+        name="asl.w #2 shifts only the low word",
+        code=b"\x30\x3c\x12\x34" + b"\xe5\x40" + RTS,
+        setup="M.d[0]=0xAAAA0000;",
+        checks=[("(uint16_t)M.d[0]", 0x48D0), ("M.d[0] >> 16", 0xAAAA)],
+    ),
+    dict(
+        name="indexed addressing sign-extends a word index",
+        code=b"\x22\x30\x00\x04" + RTS,          # move.l $4(a0,d0.w),d1
+        setup=("M.a[0]=0x1000; M.d[0]=0xFFFFFFF8;"     # index -8, so 0x1000+4-8
+               " m68k_w32(0x0FFC,0x12345678);"),
+        checks=[("M.d[1]", 0x12345678)],
+    ),
+    dict(
+        name="not.l complements every bit",
+        code=b"\x70\x0f" + b"\x46\x80" + RTS,
+        setup="",
+        checks=[("M.d[0]", 0xFFFFFFF0)],
+    ),
+    dict(
+        name="neg.l negates and sets carry",
+        code=b"\x70\x05" + b"\x44\x80" + RTS,
+        setup="",
+        checks=[("(int32_t)M.d[0]", -5), ("M.c", 1)],
+    ),
+    dict(
+        name="mulu.w multiplies unsigned words into a longword",
+        code=b"\x30\x3c\xff\xff" + b"\x32\x3c\x00\x02" + b"\xc0\xc1" + RTS,
+        setup="",
+        # 0xFFFF * 2 = 0x1FFFE, which needs the full 32-bit destination.
+        checks=[("M.d[0]", 0x1FFFE)],
+    ),
+    dict(
+        name="divu.w leaves quotient low and remainder high",
+        code=b"\x20\x3c\x00\x00\x00\x11" + b"\x32\x3c\x00\x04" + b"\x80\xc1" + RTS,
+        setup="",
+        # 17 / 4 = 4 remainder 1.
+        checks=[("(uint16_t)M.d[0]", 4), ("M.d[0] >> 16", 1)],
+    ),
+    dict(
+        name="btst sets Z from the complement of the bit",
+        code=b"\x70\x08" + b"\x08\x00\x00\x03" + RTS,   # d0 = 8, test bit 3
+        setup="",
+        # Bit 3 of 8 is set, so Z is clear.
+        checks=[("M.z", 0)],
+    ),
+    dict(
+        name="btst on a clear bit sets Z",
+        code=b"\x70\x08" + b"\x08\x00\x00\x02" + RTS,
+        setup="",
+        checks=[("M.z", 1)],
+    ),
+    dict(
+        name="lsl.l by a register count",
+        code=b"\x70\x01" + b"\x72\x04" + b"\xe3\xa8" + RTS,  # d0=1, d1=4, lsl.l d1,d0
+        setup="",
+        checks=[("M.d[0]", 0x10)],
+    ),
+    dict(
+        name="asr.l keeps the sign bit",
+        code=b"\x70\xff" + b"\xe2\x80" + RTS,   # d0 = -1, asr.l #1
+        setup="",
+        checks=[("(int32_t)M.d[0]", -1)],
+    ),
+
+    # ---- third batch: register lists, addressing, memory read-modify-write ---
+    dict(
+        # movem to -(An) stores in *reverse* register order, and the matching
+        # (An)+ restore reads forward. A prologue and its epilogue only agree if
+        # both orders are right, so the round trip is the check that matters.
+        name="movem round-trips through the stack",
+        code=b"\x48\xe7\xc0\x80" + b"\x4c\xdf\x01\x03" + RTS,
+        setup="M.d[0]=0x11111111; M.d[1]=0x22222222; M.a[0]=0x33333333;",
+        checks=[("M.d[0]", 0x11111111), ("M.d[1]", 0x22222222),
+                ("M.a[0]", 0x33333333)],
+    ),
+    dict(
+        name="a movem push/pop pair is stack-neutral",
+        code=b"\x48\xe7\xc0\x80" + b"\x4c\xdf\x01\x03" + RTS,
+        setup="",
+        # Three longwords down and back again, then rts pops the return
+        # sentinel m68k_call pushed -- so SP lands exactly where it started.
+        checks=[("SP", 0x8000)],
+    ),
+    dict(
+        name="exg swaps two registers whole",
+        code=b"\x70\x01" + b"\x72\x02" + b"\xc1\x41" + RTS,
+        setup="",
+        checks=[("M.d[0]", 2), ("M.d[1]", 1)],
+    ),
+    dict(
+        name="lea computes an address without touching memory",
+        code=b"\x41\xe8\x00\x10" + RTS,          # lea $10(a0),a0
+        setup="M.a[0]=0x1000; m68k_w32(0x1010,0xDEADBEEF);",
+        checks=[("M.a[0]", 0x1010), ("m68k_r32(0x1010)", 0xDEADBEEF)],
+    ),
+    dict(
+        name="bset on memory sets the bit and reports the old one",
+        code=b"\x08\xd0\x00\x05" + RTS,          # bset #5,(a0)
+        setup="M.a[0]=0x1000; m68k_w8(0x1000,0x00);",
+        # Z is set from the bit's previous value, which was clear.
+        checks=[("m68k_r8(0x1000)", 0x20), ("M.z", 1)],
+    ),
+    dict(
+        name="bset on an already-set bit clears Z",
+        code=b"\x08\xd0\x00\x05" + RTS,
+        setup="M.a[0]=0x1000; m68k_w8(0x1000,0x20);",
+        checks=[("m68k_r8(0x1000)", 0x20), ("M.z", 0)],
+    ),
+    dict(
+        name="seq writes a whole byte of condition to memory",
+        code=b"\x70\x00" + b"\x57\xd0" + RTS,   # moveq #0 (sets Z) ; seq (a0)
+        setup="M.a[0]=0x1000; m68k_w8(0x1000,0x00);",
+        checks=[("m68k_r8(0x1000)", 0xFF)],
+    ),
 ]
 
 HARNESS = r"""
