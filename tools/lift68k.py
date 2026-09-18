@@ -263,7 +263,12 @@ def emit_inner(ins, targets):
             C.append(f"{{ uint32_t _r={src}; {post} M.a[{n}]=_r; }}")
         else: C.append(unimpl(ins))
     elif base=="moveq":
-        b=P(ops[1],4); C.append(f"{{ uint32_t _r=0x{P(ops[0]).imm&0xffffffff:x}u; {b.w('_r')} fl_logic(_r,4); }}")
+        # moveq carries an 8-bit immediate and **sign-extends it to 32 bits**.
+        # Taking it as unsigned turns the idiomatic `moveq #-1,dN` -- which
+        # spells a "not found" or "end of list" result -- into 255, and the
+        # caller comparing against -1 never matches.
+        b=P(ops[1],4); v=P(ops[0]).imm & 0xFF
+        C.append(f"{{ uint32_t _r=(uint32_t)(int32_t)(int8_t)0x{v:02x}; {b.w('_r')} fl_logic(_r,4); }}")
     elif base=="lea":
         a=P(ops[0]); n=P(ops[1],4).areg
         C.append(f"M.a[{n}]={a.addr};" if a and a.addr is not None and n is not None else unimpl(ins))
@@ -277,7 +282,14 @@ def emit_inner(ins, targets):
         r=two()
         if r:
             a,b=r; op="+" if base.startswith("add") else "-"; fn="fl_add" if op=="+" else "fl_sub"
-            C.append(f"{{ uint32_t _s={a.r},_d={b.r},_r=(_d{op}_s); {b.w('_r')} {fn}(_s,_d,_r,{sz}); }}")
+            if b.areg is not None:
+                # An destination: the 68000 does not touch the condition codes,
+                # and operates on the whole register whatever the size suffix
+                # says. Setting flags here quietly changes the branch a caller
+                # takes next -- `addq #1,a0` must leave a preceding tst alone.
+                C.append(f"M.a[{b.areg}] = M.a[{b.areg}] {op} ({a.r});")
+            else:
+                C.append(f"{{ uint32_t _s={a.r},_d={b.r},_r=(_d{op}_s); {b.w('_r')} {fn}(_s,_d,_r,{sz}); }}")
             C.extend(a.post+b.post)
         else: C.append(unimpl(ins))
     elif base in ("and","andi","or","ori","eor","eori"):

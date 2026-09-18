@@ -8,6 +8,27 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **`tools/test_lift68k.py` - a differential self-check for the lifter**, run in
+  CI. It lifts short 68k byte sequences whose effect is fixed by the processor
+  manual, runs the generated C, and compares the machine state against what a
+  68000 would produce. Every lifter bug found so far was found the hard way, by
+  bisecting a title hundreds of thousands of instructions downstream of the
+  instruction that actually misbehaved; each of those is now a case here. 13 to
+  start, and cheap to add to.
+
+### Fixed
+
+Both of these were found by the new check within minutes of it working, which is
+the argument for it:
+
+- **`moveq` did not sign-extend.** It carries an 8-bit immediate and extends it
+  to 32 bits, so `moveq #-1,dN` -- how a routine spells "not found" or "end of
+  list" -- was becoming **255**, and every caller comparing against -1 silently
+  missed.
+- **`addq`/`addi`/`subq` to an address register set the flags.** On a 68000 an
+  `An` destination leaves the condition codes alone, so `addq #1,a0` between a
+  test and its branch was quietly changing which way the branch went.
+
 - **A document's own resource fork** (`OpenRFPerm`, `OpenResFile`). A stack
   carries its own resources and HyperCard opens them before reading a card. The
   fork is a self-contained database, so `files.c` parses it once -- header, type
