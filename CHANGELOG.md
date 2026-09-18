@@ -8,6 +8,27 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **`tools/relocs.py` - THINK C far-model relocations.** An application built
+  in the far model does not reach its globals through A5; it puts **absolute
+  32-bit data offsets inline in the code** and ships `CREL`/`DREL` to say where
+  they are. Until those are applied, a string a function passes to `printf` is
+  an integer nobody can follow, so neither a disassembly nor the lifter can say
+  what the code is talking about.
+- `CREL <n>` is a flat list of ascending 16-bit offsets into `CODE <n>`, each
+  naming a longword that holds a `DATA` offset - sometimes arriving as two
+  ascending runs that concatenate into one list. **Confirmed**: reading the
+  longword at each listed site lands on real string starts - `CArray.c`,
+  `CObject.c`, `CWindow.c`, an assertion message - which random offsets would
+  not. On the application this was written against, 8,165 fixups with 85 on
+  string starts, the rest pointing at variables and tables.
+- `DREL` does the same for `DATA`, with 32-bit entries (zero high word) then
+  16-bit ones, both locations measured as `DATA_size + (v - 0x10000)`.
+  **Confirmed only in range** - all 2,776 entries map inside `DATA`, and one
+  slot demonstrably holds a string pointer as a magnitude below A5 - so the
+  docstring says so rather than claiming the rest.
+- Recorded as a known gap: **some segments carry no `CREL` at all** (five of
+  twenty here). They reach their data some other way and this tool does not yet
+  say how.
 - **A real 5x7 text font** (`runtime/font5x7.h`). `qd_draw_char` drew a hollow
   box per character, so every title rendered unreadable word-shapes. Original
   glyph data; fixed-pitch stand-in, not a metric match for Chicago or Geneva.

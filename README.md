@@ -79,6 +79,7 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `traps.json` | 1177 trap word↔name mappings (Inside Macintosh) for the two tools above | ✅ |
 | `pict2png.py` | decode 1-bit QuickDraw PICT (v1) resources → PNG (BitsRect/PackBitsRect) | ✅ |
 | `unprotect.py` | statically unpack self-decrypting/protected CODE | ✅ **fully solved** (jump table + segment bodies, byte-exact) |
+| `relocs.py` | read THINK C far-model `CREL`/`DREL` relocations; mark which longwords in a segment are data addresses | 🟢 CREL confirmed against string starts; DREL in-range only |
 | `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
 | `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); rejects function starts that are provably not code | ✅ **97–100% instruction coverage** |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
