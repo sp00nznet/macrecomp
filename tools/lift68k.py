@@ -512,6 +512,38 @@ def lift_function(code, seg, start, end):
     return name,"\n".join(L),start,end
 
 
+def confirm_starts(code, offs, trusted):
+    """Drop candidate starts that do not land on an instruction boundary.
+
+    Starts come partly from a linear sweep that drifts over embedded data, so a
+    candidate can sit *inside* an instruction. Decoding forward from a start
+    already known good gives the real boundaries, and a candidate that is not
+    one of them is a misread -- this is the same rule the ROADMAP states for
+    reading a single instruction, applied to function splitting.
+
+    Getting this wrong is not a small error. A start one byte inside a 6-byte
+    `move.l` truncated the function before its epilogue and made the remainder
+    decode as a fresh function whose first instruction was `unlk a6` with no
+    matching `link`. Every call walked the caller's frame pointer down four
+    bytes, and the corruption surfaced much later as a null pointer in an
+    unrelated subsystem.
+
+    Jump-table entries are trusted outright: the Segment Loader itself enters
+    there, so they are starts by definition even if the sweep disagrees."""
+    good, cur = [], None
+    for o in offs:
+        if cur is None or o in trusted:
+            good.append(o); cur = o; continue
+        edge = min(o + 16, len(code))
+        bounds = set()
+        for ins in md.disasm(code[cur:edge], cur):
+            if ins.address > o: break
+            bounds.add(ins.address)
+        if o in bounds:
+            good.append(o); cur = o
+    return good
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("segfile"); ap.add_argument("--seg",type=int,required=True)
@@ -566,6 +598,15 @@ def main():
     notcode=[x for x in offs if not_68000(code, x)]
     if notcode:
         offs=[x for x in offs if x not in set(notcode)]
+    # Third filter: a start must sit on an instruction boundary of the decode
+    # that reaches it. See confirm_starts -- a mid-instruction start silently
+    # produces a function with a stray epilogue.
+    trusted={e["offset"] for e in jt["entries"] if e["thunk"] and e["segment"]==a.seg}
+    for tok in a.entry.split(","):
+        if tok.strip(): trusted.add(int(tok,0))
+    before=len(offs)
+    offs=confirm_starts(code, offs, trusted)
+    midins=before-len(offs)
     bounds=list(zip(offs, offs[1:]+[len(code)]))
     fns=[]
     for start,end in bounds:
@@ -591,6 +632,9 @@ def main():
     if notcode:
         print(f"  dropped {len(notcode)} start(s) decoding to non-68000 forms "
               f"(data misread as code)")
+    if midins:
+        print(f"  dropped {midins} start(s) not on an instruction boundary "
+              f"(the sweep drifted mid-instruction)")
     if UNPARSED:
         n = sum(UNPARSED.values())
         print(f"  {n} insn(s) in {len(UNPARSED)} form(s) had operands parse() "

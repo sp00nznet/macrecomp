@@ -157,8 +157,11 @@ void m68k_loop_tick(uint32_t pc) {
 }
 #endif
 
+static int g_watch_a6 = -1;
+
 void m68k_call(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
+    if (g_watch_a6 < 0) g_watch_a6 = getenv("MRWATCH") != 0;
     if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
     if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
@@ -172,7 +175,17 @@ void m68k_call(uint32_t addr) {
     g_shadow_sp++;   /* depth still counts past the buffer it records into */
     SP -= 4; m68k_w32(SP, RET_SENTINEL);        /* fake return address on the 68k stack */
     uint32_t after = SP;
+    /* MRWATCH=1: A6 is the frame pointer, and a callee is expected to hand it
+     * back unchanged -- link/unlk exist to guarantee exactly that. A lifted
+     * function that returns with A6 altered has corrupted its caller's frame,
+     * and every local the caller addresses as -n(a6) afterwards is wrong. That
+     * is invisible at the call site and disastrous a few frames later, so the
+     * check names the callee that did it rather than the victim. */
+    uint32_t a6_in = M.a[6];
     fn(entry);
+    if (g_watch_a6 && M.a[6] != a6_in)
+        fprintf(stderr, "m68k: %06x returned with A6 %06x -> %06x (entry %06x, SP %06x -> %06x)\n",
+                addr, a6_in, M.a[6], entry, after, SP);
     if (SP == after) SP += 4;                    /* C-style fn left it; discard */
     /* Pascal fn already popped it (and removed its args); SP is higher — leave it */
     if (g_shadow_sp > 0) g_shadow_sp--;

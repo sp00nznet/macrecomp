@@ -6,7 +6,32 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Function starts that sat *inside* an instruction** - 99 of them across
+  HyperCard's 21 segments. Starts come partly from a linear sweep that drifts
+  over embedded data, and the two existing filters (odd addresses, non-68000
+  forms) do not catch a candidate that is merely one byte into a longer
+  instruction. `confirm_starts` now decodes forward from a start already known
+  good and keeps only candidates that land on a real boundary; jump-table
+  entries are trusted outright, because the Segment Loader enters there by
+  definition.
+
+  The damage was not subtle once traced. A start one byte inside a 6-byte
+  `move.l` truncated `fn_3_1296` before its epilogue and turned the remainder
+  into a fresh function whose first instruction was `unlk a6` **with no matching
+  `link`**. Every call through it walked the caller's frame pointer down four
+  bytes, and the corruption surfaced far away as a null pointer handed to
+  `_Open` - which is why HyperCard could not open a stack. A6 clobbers per run:
+  **61 -> 0**.
+
 ### Added
+
+- **`MRWATCH=1`** - checks that a lifted function returns A6 unchanged, and
+  names the callee that did not. A6 is the frame pointer, so a callee that
+  alters it has corrupted its caller's frame; every `-n(a6)` the caller touches
+  afterwards is wrong, far from the call that caused it. This is the instrument
+  that found the above.
 
 - **File Manager (`runtime/files.c`)** - a title's own media, served read-only:
   `Open`/`OpenRF`, `Read`, `Close`, `GetEOF`, `Get`/`SetFPos`, `GetFileInfo`,
