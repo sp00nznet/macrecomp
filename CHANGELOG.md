@@ -8,6 +8,39 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **HyperCard renders.** 306 -> **372 Toolbox calls**, and the framebuffer is no
+  longer blank: it draws its own modal dialog frame, drop shadow and all,
+  through the QuickDraw HAL. Screenshot in the README. The box is empty because
+  the title asks for `DLOG 0`, which its resource fork does not contain -- an
+  early-exit path, not the Home stack.
+- **Backward-branch hook (`MR_LOOPTICK`), emitted by the lifter.** Every loop in
+  the original code goes round a backward branch, which makes it the one place a
+  runtime can get control inside a loop that performs no trap, call or tail
+  jump. It does two jobs: it advances the clock (below), and -- built with
+  `-DMACRECOMP_LOOPGUARD`, run with `MRMAXLOOPS=<n>` -- it counts branches by
+  address and prints the hottest, which names a spinning instruction outright.
+  The census is debug-only; the clock is not.
+
+### Fixed
+
+- **A `Ticks` busy-wait that could only be infinite.** Classic Mac code waits on
+  the low-memory `Ticks` global (0x16A) for timing; HyperCard spins on it to
+  calibrate machine speed:
+
+      0fdc  movea.l #$16a, a4     ; a4 = Ticks
+      0fe4  cmp.l   (a4), d7
+      0fe6  beq.b   $fe4          ; spin until Ticks changes
+
+  The runtime advanced `Ticks` only from `m68k_call`, and that loop makes no
+  calls, so the compare was always equal. A real Mac advanced it from the VBL
+  interrupt; there is none here. A backward branch now decrements a counter
+  inline and advances `Ticks` every 2048 of them, so time passes inside a loop
+  that does nothing else -- an ordinary loop pays an add and a branch. **This is
+  not specific to HyperCard**: the same shape would hang any classic-Mac title
+  that waits on `Ticks`, which is most of them.
+
+  Found by the loop census: one address took 19,999,889 of 20,000,000 ticks.
+
 - **TextEdit (`runtime/textedit.c`)** - all 22 TextEdit traps over HyperCard's
   81 call sites. Coverage 77% -> **79%** of call sites, 47% -> **52%** of
   distinct traps; the conformance harness reported it as a `GAIN`, which is what

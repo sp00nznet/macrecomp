@@ -134,18 +134,33 @@ entry address and label every instruction, the runtime finds the function whose
 body *covers* an address rather than only the one that starts at it, and **not
 one mid-function jump fails in a whole run**.
 
-HyperCard reaches **306 Toolbox calls** and then hangs. TextEdit has since
-landed (all 22 traps, 77% → 79% of call sites) and **did not clear it**, so the
-hang is not that either. It is now known not to be entry dispatch, not an
-unimplemented instruction, not a missing trap at the stall — and it makes no
-traps, calls or tail jumps while looping, which places it inside a single
-lifted function. [ROADMAP.md](ROADMAP.md) has the shadow stack, the debugging
+**HyperCard renders.** It reaches **372 Toolbox calls** and draws its own modal
+dialog frame — see the screenshot below.
+
+Getting there meant finding a loop that made no traps, no calls and no tail
+jumps. Every loop goes round a *backward branch*, so the lifter now emits a hook
+there; one address took 19,999,889 of 20,000,000 ticks, and it was a busy-wait
+on the low-memory `Ticks` global — HyperCard calibrating machine speed. The
+runtime only advanced `Ticks` from `m68k_call`, and that loop makes no calls, so
+the wait could only be infinite. The same hook now advances `Ticks` every 2048
+backward branches, which fixes the whole class: every classic-Mac timing
+busy-wait needs it. [ROADMAP.md](ROADMAP.md) has the disassembly, the debugging
 switches, and what is still stubbed (`FSDispatch`, SANE).
 
 Next target: **HyperCard** itself. It is one 68k `APPL`, and recompiling it makes
 every HyperCard stack a target at once rather than one title at a time — which
 is why the stack repos that consume it stay nearly empty. The ranked trap gap is
 in [ROADMAP.md](ROADMAP.md).
+
+## Screenshot
+
+![HyperCard 1.2.2, recompiled, drawing a modal dialog](docs/img/hypercard-first-render.png)
+
+HyperCard 1.2.2 recompiled to C and running headless: its own modal dialog
+frame, drop shadow and all, drawn through the QuickDraw HAL into a 512x342
+1-bit framebuffer. The box is empty because the title asks for `DLOG 0`, which
+its resource fork does not contain -- an early-exit path, not the Home stack.
+Real output from the run described above, not a mockup.
 
 ## Using macrecomp in your project
 

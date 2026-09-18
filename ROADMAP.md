@@ -83,40 +83,70 @@ reported it as a `GAIN`, which is what that check is for). The TERec lives in
 `selStart`/`selEnd`, `hText`, `nLines` and `lineStarts` directly, so a host-side
 mirror would only be a second copy to keep in sync.
 
-**It did not clear the hang.** The run still stops after exactly 306 Toolbox
-calls. `TENew` now returns a real handle, so the cause was something else and
-the `TENew` reading was a coincidence of ordering -- worth stating plainly,
-because the previous entry here implied otherwise.
+It did not clear the hang: the run still stopped at exactly 306 calls, so
+`TENew` returning nothing had been a coincidence of ordering rather than the
+cause.
 
-What the hang is *not*, all now measured: not entry dispatch (no mid-function
-jump fails), not an unimplemented instruction (a run executes none), not
-TextEdit, and not a missing trap at the stall -- the last five calls are
-`NewEmptyHandle` x4 and `NewHandle` x4, all implemented, all succeeding.
+### The hang: a Ticks busy-wait with no clock -- fixed
 
-It makes **no traps, no calls and no tail jumps** while looping: `MRMAXCALLS`
-does not fire at three million transfers. That narrows it to a plain `goto`
-loop wholly inside one lifted function. The shadow stack at the last trap gives
-the six frames it is inside:
+The loop made **no traps, no calls and no tail jumps**, so nothing the runtime
+normally watches could see it. What every loop does do is go round a **backward
+branch**, so the lifter now emits a hook there; built with
+`-DMACRECOMP_LOOPGUARD` and run with `MRMAXLOOPS`, it counts branches by address
+and prints the hottest. One address took 19,999,889 of 20,000,000 ticks, and
+disassembling there ended the search:
 
 ```
-[0] 5139a2  fn_1_39a2    the entry point
-[1] 5300e4  fn_3_00e4
-[2] 531e92  fn_3_1e92
-[3] 530e3a  fn_3_0e3a
-[4] 610896  fn_17_0896
-[5] 514620  fn_1_4620    NewHandle glue (innermost, returns)
+0fdc  movea.l #$16a, a4     ; a4 = the low-memory Ticks global
+0fe2  move.l  (a4), d7
+0fe4  cmp.l   (a4), d7
+0fe6  beq.b   $fe4          ; spin until Ticks changes
+0fea  addq.l  #$1, d6       ; then count iterations per tick
+0ff2  lsr.l   #$2, d0       ; ...and derive a machine-speed rating
 ```
 
-Finding it needs instruction-level visibility that does not exist yet: the
-obvious next instrument is a backward-branch budget emitted by the lifter under
-a debug flag, since neither the trap trace nor the transfer watchdog can see a
-loop that performs neither. (`gdb` in the MSYS2 toolchain here is broken --
-missing `libxxhash.dll` -- so a native backtrace was not available.)
+HyperCard calibrates machine speed by busy-waiting on `Ticks` (0x16A). The
+runtime advanced Ticks only from `m68k_call`, and this loop makes no calls, so
+the compare was always equal and the wait could only be infinite. A real Mac
+advanced Ticks from the VBL interrupt; there is no interrupt here.
 
-Three debugging instruments landed while chasing it, and all three stay:
-`MRMAXCALLS=<n>` stops after n transfers and prints the shadow stack;
-`MRSTACK=1` prints the whole shadow stack at every trap; and each `MRTRACE`
-line now carries the calling function and the call depth.
+**The fix is the same hook.** A backward branch now decrements a counter inline
+and, every 2048 of them, advances Ticks -- so time passes inside a loop that
+does nothing else. An ordinary loop pays an add and a branch. This is not
+specific to HyperCard: every classic-Mac timing busy-wait needs it, and the
+same shape would have hung any of them.
+
+### Result: HyperCard renders
+
+![HyperCard drawing a modal dialog](img/hypercard-first-render.png)
+
+306 -> **372 Toolbox calls**, and the framebuffer is no longer blank. The tail
+of the trace is `InsetRect`, `FrameRoundRect`, `PenNormal`, `SetPort`,
+`ModalDialog` -- HyperCard drawing its own modal dialog frame, drop shadow and
+all, through the QuickDraw HAL.
+
+The box is empty because the title asks for `DLOG 0` and its resource fork has
+no such resource, so the Dialog Manager builds an empty one. That is an early
+exit path, not the Home stack: `FSDispatch` and SANE are still stubs, so it
+cannot open a stack yet. The run then sits in `ModalDialog` waiting for an
+event that a headless harness never sends, which is correct behaviour rather
+than a hang.
+
+### Instruments kept
+
+`MRMAXCALLS=<n>` stops after n transfers and prints the shadow stack; `MRSTACK=1`
+prints the whole shadow stack at every trap; `MRMAXLOOPS=<n>` (with
+`-DMACRECOMP_LOOPGUARD`) prints the hottest backward branches; and each
+`MRTRACE` line carries the calling function and the call depth. `gdb` in the
+MSYS2 toolchain here is broken -- missing `libxxhash.dll` -- so a native
+backtrace was never available, and these stand in for it.
+
+### Next
+
+`m68k_jump: no function at cbfe0000`, 59 times in a run, is the next thread to
+pull: `0xCBFE0000` is one bit away from the `0xCAFE0000` return sentinel, which
+suggests something is arithmetic on a return address rather than a genuine
+target.
 
 Two other things the run settled:
 

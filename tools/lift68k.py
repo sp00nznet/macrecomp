@@ -195,6 +195,17 @@ def indirect_jump(tok):
     return None
 
 
+def brto(t, ins):
+    """A goto, with a loop tick on backward branches.
+
+    Any loop in the original code goes round a backward branch, so ticking only
+    those finds a spin without instrumenting every instruction. MR_LOOPTICK
+    compiles to nothing unless MACRECOMP_LOOPGUARD is defined."""
+    if t <= ins.address:
+        return f"MR_LOOPTICK(0x{ins.address:x}u); goto L{t:x};"
+    return f"goto L{t:x};"
+
+
 def emit(ins, targets):
     """Lift one instruction, degrading to a counted m68k_unimplemented() stub
     when an operand form parse() does not know turns up.
@@ -357,16 +368,16 @@ def emit_inner(ins, targets):
         C.append(f"m68k_call(g_seg_base+0x{t:x}u);" if t is not None else (indirect_call(ops[0]) or unimpl(ins)))
     elif base=="jmp":
         t=btarget(ops[0])
-        if t is not None: C.append(f"goto L{t:x};"); term=True; targets.add(t)
+        if t is not None: C.append(brto(t,ins)); term=True; targets.add(t)
         else: C.append(indirect_jump(ops[0]) or unimpl(ins)); C.append("return;"); term=True
     elif base=="rts": C.append("m68k_rts(); return;"); term=True
     elif base=="nop": C.append(";")
-    elif base=="bra": t=btarget(ops[0]); C.append(f"goto L{t:x};"); term=True; targets.add(t)
+    elif base=="bra": t=btarget(ops[0]); C.append(brto(t,ins)); term=True; targets.add(t)
     elif re.fullmatch(r"b(hi|ls|cc|hs|cs|lo|ne|eq|vc|vs|pl|mi|ge|lt|gt|le)",base):
-        t=btarget(ops[0]); C.append(f"if({CC[base[1:]]}) goto L{t:x};"); targets.add(t)
+        t=btarget(ops[0]); C.append(f"if({CC[base[1:]]}){{ {brto(t,ins)} }}"); targets.add(t)
     elif base.startswith("db"):
         cc=CC.get(base[2:],"0"); n=dnum(ops[0]); t=btarget(ops[1]); targets.add(t)
-        C.append(f"if(!{cc}){{ SET_DW({n},DW({n})-1); if((int16_t)DW({n})!=-1) goto L{t:x}; }}")
+        C.append(f"if(!{cc}){{ SET_DW({n},DW({n})-1); if((int16_t)DW({n})!=-1){{ {brto(t,ins)} }} }}")
     elif base.startswith("s") and base[1:] in CC:
         b=P(ops[0],1); C.extend(b.pre); C.append(b.w(f"({CC[base[1:]]}?0xff:0)")); C.extend(b.post)
     else: C.append(unimpl(ins))

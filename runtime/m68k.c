@@ -75,7 +75,8 @@ void m68k_entry_miss(uint32_t entry) {
 }
 
 /* low-memory Ticks (0x16A): the system bumps it 60/sec; games busy-wait on it.
- * We advance it on every lifted call so timing loops make progress. */
+ * We advance it on every lifted call so timing loops make progress -- and, via
+ * m68k_time_slice below, inside loops that make no calls at all. */
 static void bump_ticks(void){
     uint32_t t=(M.mem[0x16A]<<24)|(M.mem[0x16B]<<16)|(M.mem[0x16C]<<8)|M.mem[0x16D];
     t++; M.mem[0x16A]=t>>24; M.mem[0x16B]=t>>16; M.mem[0x16C]=t>>8; M.mem[0x16D]=t;
@@ -113,6 +114,48 @@ static void watchdog(void) {
     fprintf(stderr, "  last %06x, before %06x\n", g_last_call, g_prev_call);
     exit(2);
 }
+
+/* Backward branches decrement this; when it runs out, time advances. The
+ * period is a compromise: short enough that a Ticks busy-wait leaves promptly,
+ * long enough that an ordinary inner loop is not paying for a call.
+ * ponytail: a fixed period, not a real clock. If a title's timing turns out to
+ * care about the *rate*, drive this from plat_ticks() instead of a counter. */
+#define TICK_PERIOD 2048
+int mr_tickdown = TICK_PERIOD;
+
+void m68k_time_slice(void) {
+    mr_tickdown = TICK_PERIOD;
+    bump_ticks();
+}
+
+#ifdef MACRECOMP_LOOPGUARD
+/* Backward-branch census. MRMAXLOOPS=<n> stops after n ticks and prints the
+ * addresses gone round most, which names the looping instruction directly.
+ * ponytail: linear scan over the table; this is a debug build and the hot loop
+ * sits in the first few entries within moments. */
+static struct { uint32_t pc; long n; } lp[4096];
+static int n_lp;
+static long g_ticks, g_maxloops = -1;
+void m68k_loop_tick(uint32_t pc) {
+    if (g_maxloops < 0) { const char *e = getenv("MRMAXLOOPS"); g_maxloops = e ? atol(e) : 0; }
+    if (!g_maxloops) return;
+    int i;
+    for (i = 0; i < n_lp; i++) if (lp[i].pc == pc) { lp[i].n++; break; }
+    if (i == n_lp && n_lp < (int)(sizeof lp / sizeof *lp)) { lp[n_lp].pc = pc; lp[n_lp++].n = 1; }
+    if (++g_ticks <= g_maxloops) return;
+
+    fprintf(stderr, "\nm68k: MRMAXLOOPS=%ld reached -- hottest backward branches:\n", g_maxloops);
+    for (int k = 0; k < 12; k++) {          /* selection sort: 12 of a few thousand */
+        int best = -1;
+        for (i = 0; i < n_lp; i++) if (lp[i].n >= 0 && (best < 0 || lp[i].n > lp[best].n)) best = i;
+        if (best < 0 || lp[best].n <= 0) break;
+        fprintf(stderr, "  %10ld x  %06x\n", lp[best].n, lp[best].pc);
+        lp[best].n = -1;                     /* mark printed */
+    }
+    fprintf(stderr, "  last %06x, before %06x, depth %d\n", g_last_call, g_prev_call, g_shadow_sp);
+    exit(3);
+}
+#endif
 
 void m68k_call(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */

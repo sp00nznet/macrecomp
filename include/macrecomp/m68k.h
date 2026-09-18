@@ -140,4 +140,33 @@ void m68k_jt_set(uint32_t a5off, uint32_t addr); /* loader wires a5 offset -> co
 /* trap raised by the lifter for an instruction it could not translate */
 void m68k_unimplemented(const char *what, uint32_t addr);
 
+/* ---- backward-branch hook ----
+ *
+ * The lifter emits MR_LOOPTICK at every backward branch, because that is the
+ * one thing every loop in the original code has to go round. It does two jobs.
+ *
+ * 1. **Time has to pass inside a loop.** Classic Mac code busy-waits on the
+ *    low-memory Ticks global (0x16A) -- HyperCard spins on it to calibrate
+ *    machine speed, and games wait on it for timing. A real Mac advanced Ticks
+ *    from the VBL interrupt; this runtime has no interrupt, and a loop that
+ *    spins on Ticks makes no trap, call or tail jump, so nothing else in the
+ *    runtime ever gets to run. Without this the wait can only be infinite.
+ *    The counter is decremented inline and calls out rarely, so an ordinary
+ *    loop pays an add and a branch.
+ *
+ * 2. **Finding a spin.** Built with -DMACRECOMP_LOOPGUARD and run with
+ *    MRMAXLOOPS=<n>, it also counts branches by address and prints the hottest
+ *    on budget, which names the looping instruction outright. That census is
+ *    debug-only; the time slice above is not. */
+extern int mr_tickdown;
+void m68k_time_slice(void);        /* refill the counter and advance Ticks */
+
+#ifdef MACRECOMP_LOOPGUARD
+void m68k_loop_tick(uint32_t pc);
+#define MR_LOOPTICK(pc) \
+    do{ m68k_loop_tick(g_seg_base + (pc)); if(--mr_tickdown <= 0) m68k_time_slice(); }while(0)
+#else
+#define MR_LOOPTICK(pc) do{ if(--mr_tickdown <= 0) m68k_time_slice(); }while(0)
+#endif
+
 #endif /* MACRECOMP_M68K_H */
