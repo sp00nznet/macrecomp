@@ -71,6 +71,26 @@ static inline void fl_cmp(uint32_t s,uint32_t d,uint32_t r,int sz){ /* like sub 
     int savex=M.x; fl_sub(s,d,r,sz); M.x=savex;
 }
 
+/* ---- multi-precision arithmetic (the X flag) ----
+ * addx/subx/negx carry the X flag in and out, and their Z is **sticky**: it is
+ * cleared by a non-zero result and otherwise left alone, so a multi-word add
+ * ends with Z set only when every word was zero. Setting Z the ordinary way
+ * would make the top word alone decide it. */
+static inline void fl_addx(uint32_t s,uint32_t d,uint32_t r,int sz){
+    uint32_t m=msb(sz); s&=szmask(sz); d&=szmask(sz); r&=szmask(sz);
+    M.n=(r&m)!=0;
+    if(r) M.z=0;
+    M.v=(((s^r)&(d^r))&m)!=0;
+    M.c=M.x=(((s&d)|(~r&d)|(s&~r))&m)!=0;
+}
+static inline void fl_subx(uint32_t s,uint32_t d,uint32_t r,int sz){ /* d - s - x */
+    uint32_t m=msb(sz); s&=szmask(sz); d&=szmask(sz); r&=szmask(sz);
+    M.n=(r&m)!=0;
+    if(r) M.z=0;
+    M.v=(((s^d)&(d^r))&m)!=0;
+    M.c=M.x=(((s&~d)|(r&~d)|(s&r))&m)!=0;
+}
+
 /* ---- shifts (flag-setting) ---- */
 static inline uint32_t m68k_lsl(uint32_t v,int c,int sz){
     uint32_t m=szmask(sz); v&=m;
@@ -107,6 +127,22 @@ static inline uint32_t m68k_rol(uint32_t v,int c,int sz){
 static inline uint32_t m68k_ror(uint32_t v,int c,int sz){
     uint32_t m=szmask(sz),mb=msb(sz); v&=m; c&=63;
     if(c){ for(int i=0;i<c;i++){ M.c=v&1; v=(v>>1)|(M.c?mb:0); } } else M.c=0;
+    M.n=(v&mb)!=0; M.z=(v==0); M.v=0; return v;
+}
+
+/* ROXL/ROXR rotate *through* X, so the register and X together form a 9, 17 or
+ * 33 bit ring. With a zero count C takes X's value rather than being cleared,
+ * which is the one case that separates them from ROL/ROR. */
+static inline uint32_t m68k_roxl(uint32_t v,int c,int sz){
+    uint32_t m=szmask(sz),mb=msb(sz); v&=m; c&=63;
+    if(c){ for(int i=0;i<c;i++){ int nx=(v&mb)!=0; v=((v<<1)|(uint32_t)M.x)&m; M.x=nx; } }
+    M.c=M.x;
+    M.n=(v&mb)!=0; M.z=(v==0); M.v=0; return v;
+}
+static inline uint32_t m68k_roxr(uint32_t v,int c,int sz){
+    uint32_t m=szmask(sz),mb=msb(sz); v&=m; c&=63;
+    if(c){ for(int i=0;i<c;i++){ int nx=v&1; v=(v>>1)|(M.x?mb:0); M.x=nx; } }
+    M.c=M.x;
     M.n=(v&mb)!=0; M.z=(v==0); M.v=0; return v;
 }
 

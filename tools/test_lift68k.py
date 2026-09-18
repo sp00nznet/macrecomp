@@ -37,6 +37,56 @@ RTS = b"\x4e\x75"
 
 CASES = [
     dict(
+        name="addx.l carries the X flag in",
+        code=bytes.fromhex("d181") + RTS,           # addx.l d1,d0
+        setup="M.d[0]=1; M.d[1]=2; M.x=1;",
+        checks=[("M.d[0]", 4)],
+    ),
+    dict(
+        # The whole reason addx exists. Z is sticky: a zero result leaves it
+        # alone instead of setting it, so a multi-word add ends Z-set only when
+        # every word came out zero. fl_add would set Z here and a 64-bit
+        # comparison built out of addx pairs would call unequal values equal.
+        name="addx.l leaves a clear Z clear on a zero result",
+        code=bytes.fromhex("d181") + RTS,
+        setup="M.d[0]=0; M.d[1]=0; M.x=0; M.z=0;",
+        checks=[("M.d[0]", 0), ("M.z", 0)],
+    ),
+    dict(
+        name="subx.l borrows the X flag",
+        code=bytes.fromhex("9181") + RTS,           # subx.l d1,d0
+        setup="M.d[0]=5; M.d[1]=2; M.x=1;",
+        checks=[("M.d[0]", 2)],
+    ),
+    dict(
+        name="addx.b -(a0),-(a1) predecrements both operands",
+        code=bytes.fromhex("d308") + RTS,           # addx.b -(a0),-(a1)
+        setup=("M.a[0]=0x1001; M.a[1]=0x2001; M.x=1;"
+               " m68k_w8(0x1000,0x10); m68k_w8(0x2000,0x20);"),
+        checks=[("m68k_r8(0x2000)", 0x31), ("M.a[0]", 0x1000), ("M.a[1]", 0x2000)],
+    ),
+    dict(
+        name="negx.l is 0 - d - x",
+        code=bytes.fromhex("4080") + RTS,           # negx.l d0
+        setup="M.d[0]=5; M.x=1;",
+        checks=[("M.d[0]", 0xFFFFFFFA)],
+    ),
+    dict(
+        # roxr rotates through X, so the old X becomes the new high bit and the
+        # bit shifted out becomes the new X -- a 9-bit ring for a byte. Plain
+        # ror would leave bit 7 clear here.
+        name="roxr.b #1 shifts X in at the top",
+        code=bytes.fromhex("e210") + RTS,           # roxr.b #$1,d0
+        setup="SET_DB(0,0x00); M.x=1;",
+        checks=[("DB(0)", 0x80), ("M.x", 0)],
+    ),
+    dict(
+        name="roxl.l #1 shifts the top bit out into X",
+        code=bytes.fromhex("e390") + RTS,           # roxl.l #$1,d0
+        setup="M.d[0]=0x80000000; M.x=0;",
+        checks=[("M.d[0]", 0), ("M.x", 1), ("M.c", 1)],
+    ),
+    dict(
         name="dbra runs the body exactly d0+1 times",
         # moveq #3,d0 ; addq.l #1,d1 ; dbra d0,-6 ; rts
         code=b"\x70\x03" + b"\x52\x81" + b"\x51\xc8\xff\xfc" + RTS,

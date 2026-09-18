@@ -29,6 +29,7 @@ static void wr_rect(uint32_t p,const Rect*r){ m68k_w16(p,r->top); m68k_w16(p+2,r
 
 /* baseAddr value that marks "the screen" (qd_fb) vs an offscreen buffer in M.mem */
 #define SCREEN_TAG 0x00000001u
+static uint32_t g_front_win;   /* the one card window, for FindWindow */
 static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
 /* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
 static void bitmap_screen(uint32_t bm){ m68k_w32(bm,SCREEN_TAG); m68k_w16(bm+4,QD_W/8);
@@ -100,8 +101,13 @@ static void type4(uint32_t t, char *out){ /* 'PICT' long -> stripped string */
 /* Search the current resource file first, then the application's own fork --
  * the Resource Manager's chain, shortened to the two links that exist here. A
  * stack's own icons and scripts must win over HyperCard's. */
+static void mr_text_probe(const char *tag);
 static uint32_t res_get(uint32_t typelong, int id){
     char want[5]; type4(typelong,want);
+    /* HyperTalk syntax errors are STR# 1002. Probe here rather than at the
+     * ParamText that finally shows the text: this is ~8 frames closer to the
+     * parser, where its cursor is still on the stack. */
+    if(getenv("MRPARSE") && typelong==0x53545223u && id==1002) mr_text_probe("STR#1002");
     for(int pass=0; pass<2; pass++){
       int wantfile = pass==0 ? g_curres : 1;
       if(pass==1 && g_curres==1) break;
@@ -171,9 +177,17 @@ static int g_nhsz;
 static void hsz_set(uint32_t h, uint32_t sz){
     for(int i=0;i<g_nhsz;i++) if(g_hsz[i].h==h){ g_hsz[i].size=sz; return; }
     if(g_nhsz<(int)(sizeof g_hsz/sizeof *g_hsz)){ g_hsz[g_nhsz].h=h; g_hsz[g_nhsz++].size=sz; }
+    else { static int said=0; if(!said++) fprintf(stderr,"m68k: handle size table full at %d; "
+        "sizes for later handles are lost\n", g_nhsz); }
 }
 static uint32_t hsz_get(uint32_t h){
     for(int i=0;i<g_nhsz;i++) if(g_hsz[i].h==h) return g_hsz[i].size;
+    return 0;
+}
+/* Zero is a real size, so "not in the table" has to be asked separately --
+ * otherwise an unrecorded handle looks empty and gets treated as one. */
+static int hsz_known(uint32_t h){
+    for(int i=0;i<g_nhsz;i++) if(g_hsz[i].h==h) return 1;
     return 0;
 }
 
@@ -289,6 +303,52 @@ static void logtrap(uint16_t w){
     for(int i=0;i<ns;i++) if(seen[i]==w) return;
     if(ns<512) seen[ns++]=w;
     fprintf(stderr,"trap $%04X unimplemented\n", w);
+}
+
+/* Report every register and stack slot that points at a run of script text.
+ * A HyperTalk parse error names a token but not a place; the parser cursor is
+ * somewhere in the frame, and printing the line it sits on turns the message
+ * into a source location. Set MRPARSE to switch it on. */
+static void mr_text_probe(const char *tag){
+    fprintf(stderr,"[parse:%s] scan sp=%06x a6=%06x d0=%08x a0=%06x\n",
+            tag, SP, M.a[6], M.d[0], M.a[0]);
+    fprintf(stderr,"[parse:%s] call chain:", tag);
+    for(int f=g_shadow_sp-1; f>=0 && f>g_shadow_sp-24; f--)
+        fprintf(stderr," %06x", (unsigned)g_shadow[f]);
+    fprintf(stderr,"\n");
+    for(int i=0;i<16+4096 && (i<16 || SP+4u*(i-16)<0x3F0000u);i++){
+        uint32_t v = i<8 ? M.d[i] : i<16 ? M.a[i-8] : m68k_r32(SP+4u*(i-16));
+        if(v<64 || v+64>=M.memsize) continue;
+        int printable=0;
+        for(int k=-32;k<32;k++){ uint8_t c=M.mem[v+k];
+            if((c>=0x20&&c<0x7f)||c==0x0D||c==0x09) printable++; }
+        if(printable<62) continue;
+        uint32_t ls=v, le=v;
+        while(ls>0 && M.mem[ls-1]!=0x0D && v-ls<100) ls--;
+        while(le+1<M.memsize && M.mem[le]!=0x0D && M.mem[le] && le-v<100) le++;
+        fprintf(stderr,"[parse:%s] ",tag);
+        if(i<16) fprintf(stderr,"%s%d",i<8?"d":"a",i<8?i:i-8);
+        else     fprintf(stderr,"%d(sp)",4*(i-16));
+        fprintf(stderr," = %06x col %u: \"", v, (unsigned)(v-ls));
+        for(uint32_t q=ls;q<le;q++) fputc(M.mem[q],stderr);
+        fprintf(stderr,"\"\n"); }
+    /* A script cursor is usually a handle plus an offset, not a bare pointer,
+     * so also follow one level of indirection: slot -> master pointer -> text. */
+    for(int i=0;i<16+4096 && (i<16 || SP+4u*(i-16)<0x3F0000u);i++){
+        uint32_t hv = i<8 ? M.d[i] : i<16 ? M.a[i-8] : m68k_r32(SP+4u*(i-16));
+        if(hv<64 || hv+4>=M.memsize) continue;
+        uint32_t v = m68k_r32(hv);
+        if(v<64 || v+64>=M.memsize) continue;
+        int printable=0;
+        for(int k=0;k<64;k++){ uint8_t c=M.mem[v+k];
+            if((c>=0x20&&c<0x7f)||c==0x0D||c==0x09) printable++; }
+        if(printable<60) continue;
+        fprintf(stderr,"[parse:%s] *",tag);
+        if(i<16) fprintf(stderr,"%s%d",i<8?"d":"a",i<8?i:i-8);
+        else     fprintf(stderr,"%d(sp)",4*(i-16));
+        fprintf(stderr," -> %06x: \"", v);
+        for(int q=0;q<64;q++){ uint8_t c=M.mem[v+q]; fputc(c==0x0D?'|':c, stderr); }
+        fprintf(stderr,"\"\n"); }
 }
 
 void m68k_trap(uint16_t raw){
@@ -443,19 +503,34 @@ void m68k_trap(uint16_t raw){
         bitmap_screen(w+2);                 /* GrafPort.portBits -> the screen */
         wr_rect(w+16, &pr);                 /* GrafPort.portRect */
         m68k_w32(w+0xFC, refcon);           /* WindowRecord.refCon (approx offset) */
+        g_front_win = w;
         m68k_w32(SP, w);                    /* Pascal result slot */
     } break;
     case 0xA9BD: /*GetNewWindow*/ {
         uint32_t behind=pop32(); (void)behind; uint32_t wstor=pop32(); (void)pop16();
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect pr; rect_set(&pr,0,0,QD_H,QD_W); bitmap_screen(w+2); wr_rect(w+16,&pr);
+        g_front_win = w;
         m68k_w32(SP, w);
     } break;
-    case 0xA914: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
+    case 0xA910: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
+    case 0xA914: /*DisposeWindow*/ { uint32_t w=pop32(); if(w==g_front_win) g_front_win=0; } break;
     case 0xA91F: /*SelectWindow*/ case 0xA915: /*ShowWindow*/ case 0xA916: /*HideWindow*/
     case 0xA922: /*BeginUpdate*/ case 0xA923: /*EndUpdate*/ case 0xA928: /*InvalRect*/
     case 0xA92A: /*ValidRect*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
-    case 0xA924: /*FrontWindow*/ ret32(0); break;
+    case 0xA924: /*FrontWindow*/ ret32(g_front_win); break;
+    /* FindWindow is what turns a click into a destination. One full-screen card
+     * window means the only distinction that matters is menu bar vs. content;
+     * answering inDesk for everything, as an unimplemented trap effectively
+     * does, drops every click and nothing can be navigated. */
+    case 0xA92C: /*FindWindow*/ { uint32_t wp=pop32(), pt=pop32(); int h,v;
+        pt_unpack(pt,&h,&v); (void)h;
+        int part = v<20 ? 1/*inMenuBar*/ : g_front_win ? 3/*inContent*/ : 0/*inDesk*/;
+        if(wp) m68k_w32(wp, part==3 ? g_front_win : 0);
+        ret16((uint16_t)part); } break;
+    case 0xA851: /*SetCursor*/ (void)pop32(); break;   /* nothing draws a cursor */
+    case 0xA976: /*GetKeys*/ { uint32_t km=pop32();    /* no modifier is held */
+        if(km) for(int i=0;i<16;i+=4) m68k_w32(km+i,0); } break;
     /* One full-screen port stands in for the window list, so a window's title
      * and position are accepted and discarded rather than refused: a title that
      * cannot set them has no way forward, and nothing here can show them. */
@@ -638,7 +713,12 @@ void m68k_trap(uint16_t raw){
 
     /* ---- Resource Manager (serve the app's own resources) ---- */
     case 0xA9A0: /*GetResource*/ case 0xA81F: /*Get1Resource*/ {
-        int16_t id=pop16(); uint32_t ty=pop32(); m68k_w32(SP, res_get(ty,id)); } break;
+        int16_t id=pop16(); uint32_t ty=pop32();
+        /* MRPARSE: HyperTalk's syntax errors are STR# 1002. Probing here rather
+         * than at the ParamText that finally shows the text puts us ~8 frames
+         * closer to the parser, where its cursor is still on the stack. */
+        if(getenv("MRPARSE") && ty==0x53545223u && id==1002) mr_text_probe("STR#1002");
+        m68k_w32(SP, res_get(ty,id)); } break;
     case 0xA9A1: /*GetNamedResource*/ { (void)pop32(); (void)pop32(); m68k_w32(SP,0); } break;
     case 0xA9BC: /*GetPicture*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x50494354u,id)); } break; /*'PICT'*/
     case 0xA9BF: /*GetRMenu/GetMenu*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x4D454E55u,id)); } break; /*'MENU'*/
@@ -892,6 +972,11 @@ void m68k_trap(uint16_t raw){
                 fprintf(stderr,"  ParamText ^%d = \"", k);
                 for(int i=0;i<l&&i<80;i++) fputc((int)m68k_r8(ps[k]+1+i), stderr);
                 fprintf(stderr,"\"\n"); } }
+        /* MRPARSE: a HyperTalk syntax error arrives here as text, and the
+         * parser's position is still live in the registers. Find the script in
+         * guest memory, then report every register pointing into it -- that
+         * turns "Can't understand what's after end" into an exact line. */
+        if(getenv("MRPARSE")) mr_text_probe("ParamText");
         dlg_param_text(p0,p1,p2,p3); } break;
     case 0xA984: /*FindDialogItem*/ { uint32_t pt=pop32(), d=pop32(); int ph,pv;
         pt_unpack(pt,&ph,&pv); ret16((uint16_t)(int16_t)dlg_find_item(d,ph,pv)); } break;
@@ -977,13 +1062,21 @@ void m68k_trap(uint16_t raw){
     /* ---- Memory Manager (register-based) ---- */
     case 0xA025: /*GetHandleSize*/ M.d[0]=hsz_get(M.a[0]); break;
     case 0xA024: /*SetHandleSize*/ { uint32_t h=M.a[0], want=M.d[0];
-        uint32_t have=hsz_get(h);
         if(!h){ M.d[0]=(uint32_t)-109; break; }
-        if(want<=have){ hsz_set(h,want); M.d[0]=0; break; }
+        int known=hsz_known(h); uint32_t have=hsz_get(h);
+        if(known && want<=have){ hsz_set(h,want); M.d[0]=0; break; }
         uint32_t np=heap_alloc(want);
         if(!np){ M.d[0]=(uint32_t)-108; break; }
         uint32_t op=m68k_r32(h);
-        for(uint32_t i=0;i<have;i++) m68k_w8(np+i, m68k_r8(op+i));
+        /* A handle the HAL never recorded has no known length, and copying
+         * `have` -- zero -- would hand back a wiped block. Copy what the caller
+         * asked for instead: this heap never reuses a block, so reading past
+         * the old one is harmless and the surplus is beyond what is asked for.
+         * Silently emptying a handle here is indistinguishable, further on,
+         * from the data having been garbage all along. */
+        uint32_t n = known ? have : want;
+        if(n>want) n=want;
+        for(uint32_t i=0;i<n;i++) m68k_w8(np+i, m68k_r8(op+i));
         m68k_w32(h,np); hsz_set(h,want); M.d[0]=0; } break;
     case 0xA02D: /*SetApplLimit*/ M.d[0]=0; break;   /* bump heap: no limit to set */
     /* SysEnvirons(D0 = versRequested, A0 = SysEnvRec*). Describe a machine that

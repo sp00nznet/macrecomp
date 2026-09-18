@@ -8,6 +8,76 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- **A window.** `runtime/platform_sdl.c` was written but never linked: it
+  includes `<SDL.h>`, and nothing put SDL2's include directory on the compile
+  line, so every build quietly fell back to the loader's headless stubs. Those
+  stubs are now behind `#ifndef MACRECOMP_SDL`, `main` calls `plat_open`, and a
+  build with `-DMACRECOMP_SDL` puts the title on screen with a real mouse and
+  keyboard. HyperCard 1.2.2 draws recognisable Mac dialogs -- frame, drop
+  shadow, default-button ring, Chicago text -- so QuickDraw and the Dialog
+  Manager are confirmed against something other than a pixel count.
+- **`addx`, `subx`, `negx`, `roxl`, `roxr`** in the lifter, with seven cases in
+  the differential check (46 total). HyperCard 2.4 executed `addx.l` sixteen
+  times in its first 721 traps. `addx`/`subx`/`negx` have a **sticky Z**: a zero
+  result leaves Z alone rather than setting it, so a multi-word add ends Z-set
+  only when every word was zero; using `fl_add` here would let the top word
+  alone decide a 64-bit comparison. `roxl`/`roxr` rotate *through* X, and with a
+  zero count C takes X's value instead of being cleared.
+- **`FindWindow`, `SetCursor`, `GetKeys`.** FindWindow is what turns a click
+  into a destination; unimplemented, it left every click pointing at the desktop
+  and nothing could be navigated. One full-screen card window means the only
+  distinction that matters is menu bar versus content.
+- **Debug probes**: `MRBRK=<hex addr>` reports the arguments a chosen function
+  is called with, `MRBRKA5=<offsets>` shows the A5 globals beside them, and
+  `MRPARSE` reports every register and stack slot pointing at script text. An
+  assertion that compares two globals says nothing until you can see what they
+  hold; this is how error 123452 was traced to a single `cmp.l` in CODE 16.
+- A recorded conformance baseline for **HyperCard 2.4.1 (70%)**, so the harness
+  can now fail on a regression there rather than only reporting a number.
+
+### Fixed
+
+- **`$A914` was labelled `GetWMgrPort`; it is `DisposeWindow`** (GetWMgrPort is
+  `$A910`). The old case popped the WindowPtr and wrote zero *through* it,
+  clearing the first field of the port it was handed.
+- **`SetHandleSize` silently emptied any handle the HAL had not recorded.**
+  `hsz_get` returns 0 both for a zero-length handle and for an unknown one, so
+  growing an unknown handle allocated a new block, copied zero bytes into it,
+  and returned it as if the data had moved. Unknown is now asked separately, and
+  an unknown handle copies what the caller asked for -- safe, because this heap
+  never reuses a block. A wiped handle is indistinguishable further on from data
+  that was garbage all along, which is the worst kind of bug to chase.
+- `MRSHOT` no longer overwrites the one frame worth keeping with the blank one a
+  title leaves behind on the way out.
+
+### Investigation
+
+HyperCard 1.2.2 still stops at `Can't understand what's after "end"` before it
+opens a catalog stack. What is now known:
+
+- **The Home stack has no checksum**, so its scripts can be edited in place and
+  bisected. (An earlier note guessed there was one at STAK+0x0C; there is not --
+  emptying the script changes behaviour because the handlers stop existing, not
+  because the file is rejected.)
+- The error needs a **chain**, not a single line: `show card field "Copyright"`
+  *and* `pass startup` in the card script of CARD 5341, *and* `go to card "User
+  Preferences"` *and* the two `set lock...` lines in the stack's `getHomeInfo`.
+  Blanking any one link removes it. No single script is mis-parsed -- each of
+  them is ordinary, and all of them shipped with HyperCard.
+- Nothing points at the failing text by the time `ParamText` is reached, and the
+  one stack slot that still holds script text (`on resume`, offset 382) is
+  stale: blanking that handler does not move the error.
+- Patching `getHomeInfo` out reaches further -- HyperCard enumerates the
+  catalog's own stacks, `COMMUNICATIONS` through `HOUSEHOLD` -- and then fails a
+  different assertion, `Unexpected error 123452`, which is `cmp.l -$1318(a5),d0`
+  against `-$11c2(a5)` in CODE 16. `-$1318(a5)` holds a real pointer;
+  `-$11c2(a5)` holds 1. Its three writers all store pointers and the one taking
+  a parameter is never called, so the value arrives from somewhere else. That
+  assertion fires only *after* a HyperTalk error, so it is downstream of the
+  parse failure rather than a separate blocker.
+
+### Added
+
 - **1021 -> 2267 Toolbox calls.** `SetWTitle`, `MoveWindow`, `SizeWindow`,
   `EqualRect`, `EmptyRect`, `GetCursor`, `GetWTitle`, `DeleteMenu`,
   `SetStdProcs`, `SndNewChannel`, and the Colour QuickDraw device list, which

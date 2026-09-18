@@ -19,7 +19,12 @@
       "file": "HyperCard",
       "source": "archive.org/details/HyperCardBootSystem6",
       "note": "System 6.0.8 boot disk; smallest complete fixture, the CI default if a corpus is present.",
-      "baseline": null
+      "baseline": {
+        "sites_covered": 4677,
+        "sites_total": 6618,
+        "distinct_covered": 264,
+        "distinct_total": 491
+      }
     },
     {
       "name": "HyperCard 2.4",

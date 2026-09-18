@@ -207,11 +207,32 @@ void m68k_loop_tick(uint32_t pc) {
 
 static int g_watch_a6 = -1;
 
+static uint32_t g_brk = 0xFFFFFFFFu;
 void m68k_call(uint32_t addr) {
     if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
     if (g_watch_a6 < 0) g_watch_a6 = getenv("MRWATCH") != 0;
     if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
     if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
+    /* MRBRK=<hex addr>: report the arguments a chosen function is called with.
+     * Pascal arguments sit above the return address, so print a few longwords
+     * from there along with the registers. */
+    if (g_brk == 0xFFFFFFFFu) { const char *e = getenv("MRBRK"); g_brk = e ? strtoul(e,0,16) : 0; }
+    if (g_brk && addr == g_brk) {
+        fprintf(stderr, "[brk %06x] d0=%08x d1=%08x d2=%08x a0=%06x a1=%06x sp=%06x\n",
+                addr, M.d[0], M.d[1], M.d[2], M.a[0], M.a[1], SP);
+        /* MRBRKA5=<signed decimal offsets, comma separated>: the A5 globals to
+         * show alongside. An assertion that compares two globals says nothing
+         * until you can see what they hold. */
+        { const char *g = getenv("MRBRKA5");
+          if (g) { fprintf(stderr, "[brk %06x] a5=%06x:", addr, M.a[5]);
+            while (*g) { long o = strtol(g, (char**)&g, 10);
+                fprintf(stderr, " [%ld]=%08x", o, m68k_r32((uint32_t)(M.a[5] + o)));
+                while (*g == ',' || *g == ' ') g++; }
+            fprintf(stderr, "\n"); } }
+        fprintf(stderr, "[brk %06x] args:", addr);
+        for (int i = 0; i < 8; i++) fprintf(stderr, " %08x", m68k_r32(SP + 4u*i));
+        fprintf(stderr, "\n");
+    }
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);
     if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;

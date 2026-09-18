@@ -18,16 +18,24 @@ add_library(macrecomp STATIC
 target_compile_definitions(macrecomp PRIVATE MACRECOMP_NO_TRAP_STUB)
 target_include_directories(macrecomp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# MACRECOMP_SDL is PUBLIC on purpose: a generated loader carries headless plat_*
+# stubs so a title can run with no display, and they are compiled only when this
+# is absent. Defining it PRIVATE would build platform_sdl.c and the stubs both,
+# and the link would fail on duplicate symbols.
 find_package(SDL2 QUIET)
 if(SDL2_FOUND)
     target_link_libraries(macrecomp PUBLIC SDL2::SDL2)
+    target_compile_definitions(macrecomp PUBLIC MACRECOMP_SDL)
 else()
     # fall back to pkg-config (MSYS2/mingw)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(SDL2 QUIET sdl2)
-        target_include_directories(macrecomp PUBLIC ${SDL2_INCLUDE_DIRS})
-        target_link_libraries(macrecomp PUBLIC ${SDL2_LIBRARIES})
+        if(SDL2_FOUND)
+            target_include_directories(macrecomp PUBLIC ${SDL2_INCLUDE_DIRS})
+            target_link_libraries(macrecomp PUBLIC ${SDL2_LIBRARIES})
+            target_compile_definitions(macrecomp PUBLIC MACRECOMP_SDL)
+        endif()
     endif()
 endif()
 if(NOT MSVC)

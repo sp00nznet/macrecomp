@@ -40,6 +40,12 @@ int plat_open(const char *title, int scale){
 static void shot(void){
     const char *path = getenv("MRSHOT");
     if(!path) return;
+    /* Skip an all-white frame. Every present overwrites this file, so a title
+     * that clears the screen on the way out would otherwise replace the one
+     * frame worth keeping with a blank one. */
+    {   int any=0;
+        for(int y=0;y<QD_H&&!any;y++) for(int x=0;x<QD_W;x++) if(qd_fb[y][x]){ any=1; break; }
+        if(!any) return; }
     FILE *f = fopen(path, "wb");
     if(!f) return;
     fprintf(f, "P5\n%d %d\n255\n", QD_W, QD_H);
@@ -61,7 +67,9 @@ void plat_present(void){
 void plat_pump(void){
     SDL_Event e;
     while(SDL_PollEvent(&e)){
-        if(e.type==SDL_QUIT) quit_req=1;
+        /* Nothing polls plat_quit_requested, so closing the window has to
+         * act here or the title keeps running with no way to stop it. */
+        if(e.type==SDL_QUIT){ quit_req=1; plat_shutdown(); exit(0); }
         else if(e.type==SDL_MOUSEBUTTONDOWN) evpush(1/*mouseDown*/,0,e.button.x/g_scale,e.button.y/g_scale);
         else if(e.type==SDL_MOUSEBUTTONUP)   evpush(2/*mouseUp*/,0,e.button.x/g_scale,e.button.y/g_scale);
         else if(e.type==SDL_KEYDOWN){ if(e.key.keysym.sym==SDLK_ESCAPE) quit_req=1;
@@ -75,7 +83,15 @@ int plat_button(void){ return (SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(SDL_BUTTO
 uint32_t plat_ticks(void){ return (SDL_GetTicks()-start_ms)*60u/1000u; }
 
 int plat_next_event(int *what,int *msg,int *h,int *v){
-    if(evhead==evtail){ if(what)*what=0; return 0; }
+    if(evhead==evtail){
+        /* MRKEYS=1: answer modal dialogs with Return so an unattended run keeps
+         * going. Off by default here -- with a window open there is a person to
+         * click, and a synthetic keypress would fight them for the dialog. */
+        static int on=-1; static long polls;
+        if(on<0){ const char *e=getenv("MRKEYS"); on = e?atoi(e):0; }
+        if(on && ++polls % 3000 == 0){
+            if(what)*what=3; if(msg)*msg=13; if(h)*h=0; if(v)*v=0; return 1; }
+        if(what)*what=0; return 0; }
     if(what)*what=evq[evhead].what; if(msg)*msg=evq[evhead].msg;
     if(h)*h=evq[evhead].h; if(v)*v=evq[evhead].v; evhead=(evhead+1)%EVQ; return 1;
 }

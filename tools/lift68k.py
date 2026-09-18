@@ -379,9 +379,30 @@ def emit_inner(ins, targets):
                         C.append(f"  m68k_w{sz*8}(_ea+{off}u,{regref(r)});")
                 C.append("}")
             else: C.append(unimpl(ins))
-    elif base in ("lsl","lsr","asl","asr","rol","ror"):
+    elif base in ("addx","subx"):
+        # Register and predecrement-memory forms both exist; the flags come from
+        # fl_addx / fl_subx, whose Z is sticky.
+        a=P(ops[0]); b=P(ops[1])
+        if a and b:
+            C.extend(a.pre); C.extend(b.pre)
+            op="+" if base=="addx" else "-"
+            fn="fl_addx" if base=="addx" else "fl_subx"
+            C.append(f"{{ uint32_t _s={a.r},_d={b.r},_r=(_d{op}_s{op}(uint32_t)M.x);"
+                     f" {b.w('_r')} {fn}(_s,_d,_r,{sz}); }}")
+            C.extend(a.post+b.post)
+        else: C.append(unimpl(ins))
+    elif base=="negx":
+        b=P(ops[0])
+        if b:
+            C.extend(b.pre)
+            C.append(f"{{ uint32_t _d={b.r},_r=(uint32_t)(0-_d-(uint32_t)M.x);"
+                     f" {b.w('_r')} fl_subx(_d,0,_r,{sz}); }}")
+            C.extend(b.post)
+        else: C.append(unimpl(ins))
+    elif base in ("lsl","lsr","asl","asr","rol","ror","roxl","roxr"):
         fn={"lsl":"m68k_lsl","lsr":"m68k_lsr","asl":"m68k_asl","asr":"m68k_asr",
-            "rol":"m68k_rol","ror":"m68k_ror"}[base]
+            "rol":"m68k_rol","ror":"m68k_ror",
+            "roxl":"m68k_roxl","roxr":"m68k_roxr"}[base]
         cnt = P(ops[0]).imm if P(ops[0]) and P(ops[0]).imm is not None else None
         if len(ops)==2 and cnt is not None:              # #cnt,Dn
             n=dnum(ops[1]); wf={1:"SET_DB",2:"SET_DW",4:"SET_DL"}[sz]; rf={1:"DB",2:"DW",4:"DL"}[sz]
