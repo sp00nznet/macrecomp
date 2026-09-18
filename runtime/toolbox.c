@@ -27,18 +27,30 @@ static Rect rd_rect(uint32_t p){ Rect r; r.top=(int16_t)m68k_r16(p); r.left=(int
 static void wr_rect(uint32_t p,const Rect*r){ m68k_w16(p,r->top); m68k_w16(p+2,r->left);
     m68k_w16(p+4,r->bottom); m68k_w16(p+6,r->right); }
 
-/* baseAddr value that marks "the screen" (qd_fb) vs an offscreen buffer in M.mem */
-#define SCREEN_TAG 0x00000001u
+/* The baseAddr that marks "the screen" (qd_fb) rather than an offscreen buffer
+ * in M.mem. This used to be the constant 1, which worked only as long as nobody
+ * looked at it: a title that keeps its own copy of the screen base and asserts
+ * its port still points there compares a real pointer against 1 and concludes
+ * the port has been redirected. HyperCard does exactly that and stops with
+ * "Unexpected error 123452". So the screen gets a genuine block of guest memory,
+ * sized like a real 1-bit screen; drawing still goes to qd_fb, the block exists
+ * so that the address is a real one and comparisons against it hold. */
+static uint32_t heap_alloc(uint32_t sz);
+static uint32_t g_screen_base;
+static uint32_t screen_base(void){
+    if(!g_screen_base) g_screen_base = heap_alloc((uint32_t)QD_H * (QD_W/8));
+    return g_screen_base;
+}
 static uint32_t g_front_win;   /* the one card window, for FindWindow */
 static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
 /* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
-static void bitmap_screen(uint32_t bm){ m68k_w32(bm,SCREEN_TAG); m68k_w16(bm+4,QD_W/8);
+static void bitmap_screen(uint32_t bm){ m68k_w32(bm,screen_base()); m68k_w16(bm+4,QD_W/8);
     Rect s={0,0,QD_H,QD_W}; wr_rect(bm+6,&s); }
 static void set_target_from_bitmap(uint32_t bm){
     uint32_t base=m68k_r32(bm); int rb=(int)(m68k_r16(bm+4)&0x3FFF);
     int bt=(int16_t)m68k_r16(bm+6),  bl=(int16_t)m68k_r16(bm+8);
     int bb=(int16_t)m68k_r16(bm+10), br=(int16_t)m68k_r16(bm+12);
-    qd_set_port(base==SCREEN_TAG || base==0, base, rb, bl, bt, br, bb);
+    qd_set_port(base==screen_base() || base==0, base, rb, bl, bt, br, bb);
 }
 
 /* ---- bump heap inside M.mem (NewPtr/NewHandle) ---- */
@@ -228,7 +240,7 @@ static void lowmem_init(void){
     m68k_w32(LM_ROMBASE, rom);
     m68k_w16(rom + 8, 0x0276);               /* ROM version word: Mac SE */
     m68k_w32(LM_MEMTOP, M.memsize);
-    m68k_w32(LM_SCRNBASE, SCREEN_TAG);
+    m68k_w32(LM_SCRNBASE, screen_base());
     m68k_w32(LM_TICKS, 0);
     m68k_w32(LM_CURRENTA5, M.a[5]);
 }
@@ -369,7 +381,32 @@ void m68k_trap(uint16_t raw){
         static long p=0; if(++p%iv==0) plat_present(); } }
     switch(w){
     /* ---- init (mostly no-ops for us) ---- */
-    case 0xA86E: /*InitGraf*/ (void)pop32(); break;      /* arg: globalsPtr */
+    /* InitGraf(globalsPtr). The argument points at the LAST field of QDGlobals
+     * (thePort), so every other field sits at a fixed negative offset from it.
+     * Discarding the pointer, as this used to, leaves screenBits, the five
+     * standard patterns, the arrow cursor and randSeed as whatever happened to
+     * be in memory -- and a title that reads qd.screenBits.baseAddr to learn
+     * where the screen is then believes the screen is somewhere else. */
+    case 0xA86E: { /*InitGraf*/
+        uint32_t gp = pop32();
+        if(getenv("MRTRACE")) fprintf(stderr,
+            "  InitGraf globals=%06x (a5%+d), screenBits at a5%+d\n",
+            gp, (int)(gp-M.a[5]), (int)(gp-122-M.a[5]));
+        if(gp >= 128){
+            m68k_w32(gp, 0);                      /* thePort: none yet */
+            bitmap_screen(gp - 122);              /* screenBits */
+            /* white, black, gray, ltGray, dkGray -- 8 bytes each, walking down */
+            static const uint8_t pats[5][8] = {
+                {0,0,0,0,0,0,0,0},
+                {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF},
+                {0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55},
+                {0x88,0x22,0x88,0x22,0x88,0x22,0x88,0x22},
+                {0x77,0xDD,0x77,0xDD,0x77,0xDD,0x77,0xDD},
+            };
+            for(int i=0;i<5;i++) for(int k=0;k<8;k++)
+                m68k_w8(gp - 8u*(uint32_t)(i+1) + (uint32_t)k, pats[i][k]);
+            m68k_w32(gp - 126, 1);                /* randSeed */
+        } } break;
     case 0xA8FE: /*InitFonts*/ case 0xA912: /*InitWindows*/ case 0xA930: /*InitMenus*/
     case 0xA9CC: /*TEInit*/    case 0xA063: /*MaxApplZone*/ case 0xA850: /*InitCursor*/
     case 0xA036: /*MoreMasters*/ break;
@@ -487,7 +524,7 @@ void m68k_trap(uint16_t raw){
     case 0xA852: /*HideCursor*/ case 0xA853: /*ShowCursor*/ case 0xA856: /*ObscureCursor*/
     case 0xA9B4: /*SystemTask*/ break;
     case 0xA86F: /*OpenPort*/ { uint32_t p=pop32(); if(p){ bitmap_screen(p+2);
-        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,SCREEN_TAG,QD_W/8,0,0,QD_W,QD_H);} } break;
+        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,screen_base(),QD_W/8,0,0,QD_W,QD_H);} } break;
     case 0xA875: /*SetPortBits*/ { uint32_t bm=pop32(); if(bm) set_target_from_bitmap(bm);
         if(getenv("MRGFX")&&bm) fprintf(stderr,"[gfx] SetPortBits base=%x rb=%d\n",m68k_r32(bm),m68k_r16(bm+4)&0x3fff); } break;
     case 0xA9B8: /*GetPattern*/ { (void)pop16(); uint32_t h=heap_alloc(4),p=heap_alloc(8);
@@ -601,7 +638,7 @@ void m68k_trap(uint16_t raw){
         if(getenv("MRGFX")) fprintf(stderr,"[gfx] CopyBits src=%x dst=%x sR=%d,%d,%d,%d dR=%d,%d,%d,%d\n",
             sbase,dbase,s.top,s.left,s.bottom,s.right,d.top,d.left,d.bottom,d.right);
         int sw=s.right-s.left, sh=s.bottom-s.top, dw=d.right-d.left, dh=d.bottom-d.top;
-        int src_screen=(sbase==SCREEN_TAG||sbase==0), dst_screen=(dbase==SCREEN_TAG||dbase==0);
+        int src_screen=(sbase==screen_base()||sbase==0), dst_screen=(dbase==screen_base()||dbase==0);
         int inv=((mode&0x24)==0x24);         /* notSrcCopy: invert */
         if(sw>0&&sh>0&&dw>0&&dh>0){
             for(int y=0;y<dh;y++){ int sy=(s.top-sbt)+y*sh/dh;

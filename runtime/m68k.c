@@ -226,7 +226,17 @@ void m68k_call(uint32_t addr) {
         { const char *g = getenv("MRBRKA5");
           if (g) { fprintf(stderr, "[brk %06x] a5=%06x:", addr, M.a[5]);
             while (*g) { long o = strtol(g, (char**)&g, 10);
-                fprintf(stderr, " [%ld]=%08x", o, m68k_r32((uint32_t)(M.a[5] + o)));
+                uint32_t v = m68k_r32((uint32_t)(M.a[5] + o));
+                fprintf(stderr, " [%ld]=%08x", o, v);
+                /* A global that holds a handle says nothing on its own -- follow
+                 * it and show the first words of the table it leads to. */
+                for (int d = 0; d < 2 && v >= 64 && v + 16 < M.memsize; d++) {
+                    uint32_t nv = m68k_r32(v);
+                    fprintf(stderr, " %s%06x{", d ? "**" : "*", v);
+                    for (int w = 0; w < 6; w++) fprintf(stderr, "%s%04x", w?" ":"", m68k_r16(v + 2u*w));
+                    fprintf(stderr, "}");
+                    v = nv;
+                }
                 while (*g == ',' || *g == ' ') g++; }
             fprintf(stderr, "\n"); } }
         fprintf(stderr, "[brk %06x] args:", addr);

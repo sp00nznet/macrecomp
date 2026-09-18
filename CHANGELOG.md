@@ -47,6 +47,19 @@ All notable changes to this project are documented here. Format follows
   an unknown handle copies what the caller asked for -- safe, because this heap
   never reuses a block. A wiped handle is indistinguishable further on from data
   that was garbage all along, which is the worst kind of bug to chase.
+- **`InitGraf` was a no-op that threw the QuickDraw globals away.** The pointer
+  it is handed is the *last* field of `QDGlobals` (`thePort`), so `screenBits`,
+  the five standard patterns, the arrow cursor and `randSeed` all sit at fixed
+  negative offsets from it. None of them were ever written, so a title that
+  reads `qd.screenBits.baseAddr` to find the screen, or `qd.gray` to fill with
+  it, got whatever happened to be in memory.
+- **The screen's `baseAddr` was the literal constant 1.** That works only as
+  long as nobody looks at it. A title that keeps its own copy of the screen base
+  and asserts its port still points there compares a real pointer against 1 and
+  concludes the port has been redirected -- which is what HyperCard's
+  `Unexpected error 123452` is. The screen now gets a genuine block of guest
+  memory, sized like a real 1-bit screen; drawing still goes to `qd_fb`, but the
+  address is real and comparisons against it hold.
 - **An offscreen draw could run off the end of its buffer and into the heap.**
   `qd_set_port` took the BitMap's `bounds.top` and `.left` and dropped `.bottom`
   and `.right`, so the plot path checked only that the local coordinates were
