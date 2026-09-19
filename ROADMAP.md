@@ -469,6 +469,32 @@ Cleared, so none of it needs redoing:
 So the site that records this particular error has not been found yet, and the
 `a5-0x5524` trail was a false lead.
 
+**The better lead, for next time.** The reported word has walked `if` -> `end`
+-> `pass` as each fix landed, and the catalogue's `on idle` is
+
+    if curSnd is not empty then
+      ...
+      if the sound is chunkName then ... else if the sound is "done" then ...
+      end if
+    end if
+    pass idle
+
+-- so the defect is most likely in nested `if` / `else if` handling, with
+`pass` merely being where the parser lands afterwards. The relevant state is:
+
+| global | meaning |
+|---|---|
+| `a5-0x57ea` | the if/repeat **nesting stack**, 128 bytes |
+| `a5-0x576a` | its **depth** |
+| `a5-0x57eb` | the **current state**, the byte just below the stack |
+
+`fn_14_11d4` and `fn_9_408a` both pop it with
+`d0 = depth-1; state = stack[d0]`, and `fn_14_0aa8` -- the `else` handler --
+refuses unless the state is 5 or 6, reporting `STR# 1002` #66,
+`Found "else" without "then"`. Watching `a5-0x576a` and `a5-0x57eb` while the
+catalogue's `on idle` compiles is the way in.
+
+
 
 
 - **The card stops at row 53 of 342, and the mechanism is now known.** The
