@@ -23,6 +23,17 @@ static void evpush(int what,int msg,int h,int v){
     int n=(evtail+1)%EVQ; if(n==evhead) return; evq[evtail].what=what; evq[evtail].msg=msg;
     evq[evtail].h=h; evq[evtail].v=v; evtail=n;
 }
+/* Synthetic-click state; see plat_inject_click. */
+static int syn_x, syn_y, syn_down, syn_live;
+/* The press has to age on every way the guest can observe the mouse, not just
+ * on the event queue: a title that tracks a click with Button()/GetMouse()
+ * stops calling GetNextEvent while it waits, so a release timed off the event
+ * loop alone never arrives and the button stays down for good. */
+static void syn_tick(void){
+    if(!syn_live) return;
+    if(syn_down && !--syn_down) evpush(2/*mouseUp*/, 0, syn_x, syn_y);
+    else if(!syn_down && ++syn_live > 400) syn_live = 0;
+}
 
 int plat_open(const char *title, int scale){
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)!=0){ fprintf(stderr,"SDL:%s\n",SDL_GetError()); return 1; }
@@ -43,12 +54,14 @@ static int screen_px(int x, int y);
 static void shot(void){
     const char *path = getenv("MRSHOT");
     if(!path) return;
-    /* Skip an all-white frame. Every present overwrites this file, so a title
-     * that clears the screen on the way out would otherwise replace the one
-     * frame worth keeping with a blank one. */
-    {   int any=0;
-        for(int y=0;y<QD_H&&!any;y++) for(int x=0;x<QD_W;x++) if(screen_px(x,y)){ any=1; break; }
-        if(!any) return; }
+    /* Skip a blank frame, white or black. Every present overwrites this file,
+     * so a title that clears or fills the screen on its way out would
+     * otherwise replace the one frame worth keeping with an empty one -- and
+     * HyperCard paints the screen solid black as it quits. */
+    {   long on=0;
+        for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) if(screen_px(x,y)) on++;
+        long total=(long)QD_W*QD_H;
+        if(on==0 || on==total) return; }
     /* Write then rename: this runs on every present, so a run killed by a
      * timeout would otherwise leave a half-written file exactly when the
      * picture is wanted. */
@@ -144,29 +157,25 @@ void plat_pump(void){
 }
 
 int plat_quit_requested(void){ return quit_req; }
-void plat_get_mouse(int *h,int *v){ int x,y; SDL_GetMouseState(&x,&y); if(h)*h=x/g_scale; if(v)*v=y/g_scale; }
-int plat_button(void){ return (SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(SDL_BUTTON_LEFT))!=0; }
+void plat_get_mouse(int *h,int *v){ syn_tick(); if(syn_live){ if(h)*h=syn_x; if(v)*v=syn_y; return; } int x,y; SDL_GetMouseState(&x,&y); if(h)*h=x/g_scale; if(v)*v=y/g_scale; }
+int plat_button(void){ syn_tick(); if(syn_live) return syn_down > 0; return (SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(SDL_BUTTON_LEFT))!=0; }
 uint32_t plat_ticks(void){ return (SDL_GetTicks()-start_ms)*60u/1000u; }
+
+/* Injected from the Toolbox HAL rather than counted here: this function is
+ * also polled by the modal-dialog loop long before the title reaches its own
+ * event loop, so a count kept here fires the click into the wrong consumer. */
+void plat_inject_click(int x, int y){
+    syn_x = x; syn_y = y; syn_live = 1; syn_down = 30;
+    evpush(1/*mouseDown*/, 0, x, y);
+    fprintf(stderr, "[click] %d,%d\n", x, y);
+}
 
 int plat_next_event(int *what,int *msg,int *h,int *v){
     if(evhead==evtail){
+        syn_tick();
         /* MRKEYS=1: answer modal dialogs with Return so an unattended run keeps
          * going. Off by default here -- with a window open there is a person to
          * click, and a synthetic keypress would fight them for the dialog. */
-        /* MRCLICK=x,y[,n]: synthesise a click at x,y after n polls (default
-         * 4000). Lets an unattended run exercise a title's own buttons, which
-         * is the only way to show that anything is actually navigable without
-         * a person at the window. */
-        {   static int cx=-1, cy, cwhen, fired; static long cpolls;
-            if(cx < 0){ const char *e=getenv("MRCLICK");
-                cx = 0; cwhen = 4000;
-                if(e) sscanf(e, "%d,%d,%d", &cx, &cy, &cwhen); }
-            if(cx > 0 && !fired && ++cpolls >= cwhen){
-                fired = 1;
-                evpush(1/*mouseDown*/, 0, cx, cy);
-                evpush(2/*mouseUp*/,   0, cx, cy);
-                fprintf(stderr, "[click] %d,%d\n", cx, cy);
-            } }
         static int on=-1; static long polls;
         if(on<0){ const char *e=getenv("MRKEYS"); on = e?atoi(e):0; }
         if(on && ++polls % 3000 == 0){

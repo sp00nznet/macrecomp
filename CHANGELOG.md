@@ -8,6 +8,62 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **HyperTalk did not execute at all, and one missing decode boundary was why.**
+  `CODE 12` is entered at offset `0x1322` through a computed jump -- no
+  instruction anywhere in the binary names that address, so nothing put a
+  boundary there and the linear decode ran straight past it. `fn_12_12ee`
+  therefore reached `m68k_entry_miss` and returned *without its epilogue*,
+  leaving A6 pointing into its own frame. Its caller is the HyperTalk parser
+  (`seg14+0x1d26` -> `fn_14_298e`), so every frame above it was wrong and the
+  parser reported `Can't understand what's after "if"` on a script that is
+  perfectly valid.
+
+  Lifting `CODE 12` with `--entry 0x1322` closes it. The whole cascade goes:
+  nine `returned with A6` failures and every `no function at` error drop to
+  **zero**, and HyperCard now runs the stack script -- `hide menuBar` from the
+  catalogue's `on openStack` reaches low memory 0x0BAA, which no run had ever
+  done before.
+
+  The flag is per-title and has to be passed by hand; the lifter cannot find a
+  computed entry by static analysis, which is exactly what `--entry` is for.
+
+- **A synthesised click was never acted on because the mouse did not stay
+  under it.** `MRCLICK` posted mouseDown and mouseUp back to back, but a title
+  tracks a press with `Button()` and `GetMouse()`, and both reported the *real*
+  cursor. HyperCard read that as "moved away before the release" and cancelled
+  the click every time. The press now pins the reported position and holds the
+  button down, ageing on every route the guest can observe the mouse rather
+  than on the event queue alone -- a title that tracks a press stops polling
+  `GetNextEvent` while it waits, so a release timed off the event loop never
+  arrives.
+
+  The click count also moved out of the platform layer and into the Event
+  Manager shim: the modal-dialog loop polls `plat_next_event` directly, long
+  before the title reaches its own event loop, and was eating the click.
+
+  **HyperCard now hit-tests the click against the right button**: a click at
+  93,96 answers `PtInRect` true against `81,2,112,185`, which is the
+  catalogue's first Table of Contents button, the one whose script is
+  `go to stack "WHOLE SYSTEMS"`.
+
+### Added
+
+- **`MRWATCH` now reports a callee that pops past its caller's frame.** A
+  Pascal callee pops its own arguments, so SP legitimately comes back higher
+  than it went in -- but never above the caller's frame pointer, where the
+  saved A6 and return address live. The existing A6 check only fires once the
+  damage is done, several frames later and in a function that did nothing
+  wrong; this one names the callee that did it. It is what found the decode
+  boundary above.
+- **`MRTEXT=1` echoes what the title draws through `DrawString`.** A dialog a
+  title puts up is usually saying exactly what went wrong, and reading it off a
+  1-bit framebuffer is much harder than reading it here.
+- **`MRHIT=1` reports every `PtInRect` that answers true**, with the point and
+  the rectangle -- how a click is confirmed to have reached the right control.
+- `MRSHOT` now skips an all-*black* frame as well as an all-white one.
+  HyperCard paints the screen solid black as it quits, which was overwriting
+  the one frame worth keeping.
+
 - **`ScreenRow` (low memory 0x106) was never set.** It is how a title steps
   from one screen row to the next when it blits with its own code instead of
   going through `CopyBits`. Left at zero, `mulu.w` against it makes every row

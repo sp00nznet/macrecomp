@@ -378,6 +378,19 @@ void m68k_call(uint32_t addr) {
                     addr, nm[i], sav[i], now);
         }
     }
+    /* A Pascal callee pops its own arguments, so SP legitimately comes back
+     * higher than it went in -- but never above the caller's frame pointer.
+     * The caller's saved A6 and return address live there, and a callee that
+     * pops past them overwrites its own caller's frame with the next push.
+     * That is where a lost A6 starts; the A6 check below only sees it once the
+     * damage is already done, several frames later. */
+    if (g_watch_a6 && M.a[6] == a6_in && a6_in && a6_in < M.memsize && SP > a6_in) {
+        static int nsp = 0;
+        if (nsp++ < 12)
+            fprintf(stderr, "m68k: %06x popped past its caller's frame: "
+                            "SP %06x -> %06x, caller A6 %06x (entry %06x)\n",
+                    addr, after, SP, a6_in, entry);
+    }
     if (g_watch_a6 && M.a[6] != a6_in)
         fprintf(stderr, "m68k: %06x returned with A6 %06x -> %06x (entry %06x, SP %06x -> %06x)\n",
                 addr, a6_in, M.a[6], entry, after, SP);

@@ -33,6 +33,8 @@ void qd_get_pen(int *h, int *v);
  * but a title that blits with its own code writes here, so the presented frame
  * is the union of the two. */
 uint32_t mr_screen_base(void);
+/* Queue a synthetic click (MRCLICK); driven by the HAL's event loop. */
+void plat_inject_click(int x, int y);
 void qd_line_to(int h, int v);
 void qd_line(int dh, int dv);
 void qd_pen_size(int w, int h);

@@ -607,7 +607,11 @@ void m68k_trap(uint16_t raw){
         Rect ra=rd_rect(a),rb=rd_rect(b),o; rect_union(&ra,&rb,&o); wr_rect(dst,&o); } break;
     case 0xA8AD: /*PtInRect*/ { uint32_t rp=pop32(); uint32_t pt=pop32();
         int h,v; pt_unpack(pt,&h,&v); Rect rr=rd_rect(rp);
-        retbool(pt_in_rect(h,v,&rr)); } break;
+        int in = pt_in_rect(h,v,&rr);
+        if(in && getenv("MRHIT"))
+            fprintf(stderr, "  [hit] %d,%d in %d,%d,%d,%d\n",
+                    h, v, rr.top, rr.left, rr.bottom, rr.right);
+        retbool(in); } break;
 
     /* ---- QuickDraw: drawing ---- */
     case 0xA893: /*MoveTo*/ { int16_t v=pop16(),h=pop16(); qd_pen_to(h,v); } break;
@@ -631,7 +635,12 @@ void m68k_trap(uint16_t raw){
     case 0xA87B: /*ClipRect*/  { Rect r=rd_rect(pop32()); qd_set_clip(&r); port_set_clip(&r);
         if(getenv("MRGFX")) fprintf(stderr,"[gfx] ClipRect %d,%d,%d,%d\n",r.top,r.left,r.bottom,r.right); } break;
     case 0xA884: /*DrawString*/{ uint32_t s=pop32(); int len=m68k_r8(s); uint8_t buf[256];
-        for(int i=0;i<len;i++) buf[i]=(uint8_t)m68k_r8(s+1+i); qd_draw_text(buf,len); } break;
+        for(int i=0;i<len;i++) buf[i]=(uint8_t)m68k_r8(s+1+i);
+        /* MRTEXT=1: echo what the title draws. A dialog it puts up is usually
+         * telling you exactly what went wrong, and reading it off a 1-bit
+         * framebuffer is a great deal harder than reading it here. */
+        if(getenv("MRTEXT")){ buf[len]=0; fprintf(stderr, "[text] %.*s\n", len, buf); }
+        qd_draw_text(buf,len); } break;
     case 0xA883: /*DrawChar*/  { int c=pop16();
         if(getenv("MRGFX")){ int ph,pv; qd_get_pen(&ph,&pv);
             fprintf(stderr,"[gfx] DrawChar '%c' at %d,%d\n", (c>=32&&c<127)?c:46, ph, pv); }
@@ -659,6 +668,14 @@ void m68k_trap(uint16_t raw){
          * rest of the pipeline -- expand, composite, blit -- is sound. */
         if(getenv("MRFORCEMODE") && M.a[5]) m68k_w16(M.a[5]-0x1022u, 1);
         int peek = (w == 0xA971);
+        /* MRCLICK=x,y[,n]: click x,y after n trips round the title's OWN event
+         * loop (default 200). Counted here rather than in the platform layer,
+         * which the modal-dialog loop also polls long before the title gets
+         * this far. */
+        {   static int cx=-1, cy, cwhen, fired; static long n;
+            if(cx < 0){ const char *e=getenv("MRCLICK"); cx=0; cwhen=200;
+                        if(e) sscanf(e, "%d,%d,%d", &cx, &cy, &cwhen); }
+            if(cx > 0 && !fired && ++n >= cwhen){ fired=1; plat_inject_click(cx, cy); } }
         uint32_t evp=pop32(); (void)pop16(); int what=0,msg=0,h=0,v=0;
         plat_pump();
         int got;
@@ -708,6 +725,9 @@ void m68k_trap(uint16_t raw){
                 break;
             }
         }
+        if(getenv("MRTRACE") && got && what)
+            fprintf(stderr, "  event what=%d msg=%x at %d,%d%s\n",
+                    what, (unsigned)msg, h, v, peek?" (peek)":"");
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
                  int mh,mv; plat_get_mouse(&mh,&mv); m68k_w16(evp+10,mv); m68k_w16(evp+12,mh);
                  m68k_w16(evp+14, what==8 ? 1 : 0); }   /* activeFlag */

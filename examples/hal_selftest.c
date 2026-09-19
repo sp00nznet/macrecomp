@@ -20,6 +20,7 @@
 uint32_t plat_ticks(void){ return 0; }
 void plat_get_mouse(int*h,int*v){ if(h)*h=0; if(v)*v=0; }
 int  plat_button(void){ return 0; }
+void plat_inject_click(int x,int y){ (void)x;(void)y; }
 void plat_pump(void){}
 void plat_present(void){}
 int  plat_quit_requested(void){ return 0; }

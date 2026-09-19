@@ -171,39 +171,72 @@ wrong shape, somewhere between reading the `STAK` header and reading a block id
 out of it. The instruments to use are already here: `MRSTACK` for the frame
 chain, and a probe in the generated function once the suspect is named.
 
-### Where it stops: the HyperTalk parser
+### Where it stops: one unhandled type tag (was: the HyperTalk parser)
 
-HyperCard opens the Home stack, reads its card blocks, shows a window, and then
-**compiles the stack's script** and fails with `Can't understand what's after
-"end"` -- `STR# 1002` string 53, raised at `seg9 + 0x3344` in `fn_9_3306`, a
-shared reporter that picks between errors 53 and 78 on a caller flag. The
-decision is made in the CODE 14 parser; CODE 9 only reports it.
+**The parser failure is fixed, and it was a decode boundary, not the parser.**
+`CODE 12` is entered at `0x1322` through a *computed* jump -- no instruction in
+the binary names that address, so the linear decode never put a boundary there
+and ran past it. `fn_12_12ee` hit `m68k_entry_miss` and returned without its
+epilogue, leaving A6 pointing into its own frame; its caller is the parser
+(`seg14+0x1d26` -> `fn_14_298e`), so the `Can't understand what's after "if"`
+report was a corrupted frame, not a parse.
 
-Established, so none of it needs redoing:
+Lifting `CODE 12` with `--entry 0x1322` closes it:
 
-- **The data is not at fault.** The script is 2228 bytes, CR-terminated,
-  NUL-terminated, with handlers `xy c b s startUp resume getHomeInfo
-  searchScript` and no `openStack`. All 27 file reads deliver exactly what was
-  asked, and the bytes were compared against the file in guest memory.
-- **The lifter is not at fault on that path.** 39 differential cases cover the
-  arithmetic, addressing modes, unsigned comparison and carry, PC-relative
-  indexed tables, the `move.b (a0)+,(a1)+` string copy, `movem`, `mul`/`div`,
-  shifts and rotates. All pass.
-- **The parser works on a compiled form, not the text** -- no pointer into the
-  script appears in its frame -- and it reaches its error routine through a
-  **function pointer**, so nothing calls it statically. Both facts defeat the
-  probing used everywhere else in this file.
+| | before | after |
+|---|---|---|
+| `returned with A6` failures | 9 | **0** |
+| `no function at` / entry-miss | 5 | **0** |
+| HyperTalk executes | no | **yes** |
+
+`hide menuBar` from the catalogue's `on openStack` now reaches low memory
+0x0BAA, confirmed by watchpoint -- the first HyperTalk statement this recomp
+has ever run. The flag is per-title and passed by hand: a computed entry is
+invisible to static analysis, which is what `--entry` exists for.
+
+**It now stops one layer further in.** HyperCard sets a byte tag at
+`a5-0x49aa` as it parses -- the values go 2, 3, 4, 5 -- and `fn_9_1670`
+dispatches on it with a `subq.w #1 / beq` chain that handles **only 1 to 4**,
+falling through to `move.l #$421bebe` and HyperCard's own assertion reporter.
+The dialog is `ALRT 3003`, *"Unexpected error ^0."*, with `^0` = 69320382 =
+`0x0421BEBE` -- a hardcoded assertion id in `seg9+0x1728`, not a computed
+value. `fn_14_21c4` then clears the tag to 0, which is equally out of range.
+HyperCard beeps, shows the alert and calls `ExitToShell`.
+
+So the next thread is HyperTalk's type tag at `a5-0x49aa`: either `seg14`
+should not reach 5, or `fn_9_1670`'s chain is short a case because an earlier
+`beq` was mis-lifted. Reproduce with `MRWATCHADDR=<a5-0x49aa>` (a5 is
+0x400000) and `MRBRK=591670 MRBRKA5=-18858`.
+
+**Honest trade:** before the fix HyperCard limped on a corrupted frame as far
+as its event loop and drew the top 53 rows of the card; after it, the internals
+are clean but it quits at the assertion before the event loop runs. Cleaner
+inside, less on screen. The corruption had to go first regardless -- every
+frame above it was wrong.
 
 Two dead ends, recorded so they are not retried: hiding Home (`MRSKIP=Home`)
 does not let a catalogue stack be opened directly, because HyperCard errors on
 Home itself; and emptying Home's script gets *fewer* calls, not more, most
 likely because the `STAK` block carries a checksum at +0x0C.
 
-**The next technique is a differential against a second build.** If HyperCard
-2.4 compiles the same script correctly under this runtime, the difference
-localises the fault; if it fails identically, the fault is in the runtime and
-two traces bracket it. That image is already fetched and extracted (52 CODE
-segments), so the work is lifting it and giving it a loader.
+### Clicks reach the right button
+
+A synthesised click was never acted on, and the reason was not delivery. A
+title tracks a press with `Button()` and `GetMouse()`; both reported the real
+cursor, so HyperCard read every synthetic click as "moved away before the
+release" and cancelled it. `MRCLICK` now pins the reported mouse position and
+holds the button down, ageing the press on *every* route the guest can observe
+the mouse -- a title that is tracking stops polling `GetNextEvent`, so a
+release timed off the event loop alone never arrives. The click counter also
+moved into the Event Manager shim, because the modal-dialog loop polls
+`plat_next_event` directly and was eating the click before HyperCard's own
+event loop existed.
+
+Measured, with `MRHIT=1`: a click at 93,96 answers `PtInRect` true against
+`81,2,112,185` -- the catalogue's first Table of Contents button, whose script
+is `on mouseUp / visual effect barn door open / go to stack "WHOLE SYSTEMS" /
+end mouseUp`. The click reaches the right control; what it cannot yet do is run
+the handler.
 
 ### What "on screen and navigable" still needs
 
