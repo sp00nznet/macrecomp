@@ -536,6 +536,20 @@ def run_case(cc, tmp, case):
     return None if r.returncode == 0 else r.stderr.strip()
 
 
+
+def test_odd_branch_target():
+    """A 68000 branch target is always even, so an odd one proves the decode
+    desynced. Guarding that rule here keeps a stream of data from being lifted
+    as code and silently clobbering whatever registers it touches."""
+    import lift68k as L
+    ok = L.disasm_one(bytes.fromhex("6000018c"), 0)       # bra.w to an even target
+    bad = L.disasm_one(bytes.fromhex("60000189"), 0)      # bra.w to an odd one
+    bit = L.disasm_one(bytes.fromhex("08000001"), 0)      # btst -- not a branch
+    assert ok and not L.odd_branch_target(ok)
+    assert bad and L.odd_branch_target(bad)
+    assert bit and not L.odd_branch_target(bit)
+
+
 def main():
     cc = find_cc()
     if not cc:

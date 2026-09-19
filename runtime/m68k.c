@@ -130,8 +130,8 @@ void mr_watch_hit(uint32_t addr, uint32_t val){
     /* The registers the store was built from. "Who wrote this" is only half
      * the answer when the value came out of a register loaded elsewhere. */
     if (getenv("MRWATCHREGS")){
-        fprintf(stderr, "        a2=%06x a3=%06x a4=%06x a6=%06x sp=%06x\n",
-                M.a[2], M.a[3], M.a[4], M.a[6], SP);
+        fprintf(stderr, "        a2=%06x a3=%06x a4=%06x a6=%06x sp=%06x  8(a6)=%08x\n",
+                M.a[2], M.a[3], M.a[4], M.a[6], SP, m68k_r32(M.a[6]+8));
         for (int i = 0; i < g_shadow_sp && i < 40; i++)
             fprintf(stderr, "        [%d] %06x\n", i, g_shadow[i]); }
 }
@@ -292,9 +292,14 @@ void m68k_call(uint32_t addr) {
      * byte out and the values read back are garbage that looks plausible. */
     { static int on = -1; static int fired;
       if (on < 0) on = getenv("MRODD") != 0;
-      if (on && !fired && ((SP & 1) || (M.a[6] & 1))) {
-          fired = 1;
-          fprintf(stderr, "[odd] entering %06x with sp=%06x a6=%06x\n", addr, SP, M.a[6]);
+      /* A2-A4 are callee-saved and in this title hold frame and record
+       * pointers, so an odd one is as impossible as an odd SP -- and it is
+       * the register, not the stack, that goes bad here. */
+      if (on && fired < 6 && ((SP & 1) || (M.a[6] & 1) ||
+                           (M.a[2] & 1) || (M.a[3] & 1) || (M.a[4] & 1))) {
+          fired++;
+          fprintf(stderr, "[odd] entering %06x sp=%06x a2=%06x a3=%06x a4=%06x a6=%06x\n",
+                  addr, SP, M.a[2], M.a[3], M.a[4], M.a[6]);
           for (int i = 0; i < g_shadow_sp && i < 40; i++)
               fprintf(stderr, "      [%d] %06x\n", i, g_shadow[i]); } }
     if (g_watch_a6 < 0) g_watch_a6 = getenv("MRWATCH") != 0;
@@ -305,8 +310,9 @@ void m68k_call(uint32_t addr) {
      * from there along with the registers. */
     if (g_brk == 0xFFFFFFFFu) { const char *e = getenv("MRBRK"); g_brk = e ? strtoul(e,0,16) : 0; }
     if (g_brk && addr == g_brk) {
-        fprintf(stderr, "[brk %06x] d0=%08x d1=%08x d2=%08x a0=%06x a1=%06x sp=%06x\n",
-                addr, M.d[0], M.d[1], M.d[2], M.a[0], M.a[1], SP);
+        fprintf(stderr, "[brk %06x] d0=%08x d1=%08x d2=%08x a0=%06x a1=%06x sp=%06x a3=%06x a4=%06x a6=%06x\n",
+                addr, M.d[0], M.d[1], M.d[2], M.a[0], M.a[1], SP,
+                M.a[3], M.a[4], M.a[6]);
         /* MRBRKA5=<signed decimal offsets, comma separated>: the A5 globals to
          * show alongside. An assertion that compares two globals says nothing
          * until you can see what they hold. */
@@ -378,7 +384,19 @@ void m68k_call(uint32_t addr) {
     }
     uint32_t entry = 0;                        /* 0 = enter at the function's top */
     m68k_fn fn = ft_lookup(addr);
-    if (!fn && (fn = ft_containing(addr)) != 0) entry = addr;
+    if (!fn && (fn = ft_containing(addr)) != 0) {
+        entry = addr;
+        /* MRMID=1: a call that lands inside a lifted function rather than on
+         * its top. The label switch resumes there correctly, but the prologue
+         * never ran -- no link, no movem, no argument loads -- so every
+         * callee-saved register still holds the *caller's* value and every
+         * d(a6) reference belongs to somebody else's frame. */
+        static int on = -1; static long n;
+        if (on < 0) on = getenv("MRMID") != 0;
+        if (on && n++ < 40)
+            fprintf(stderr, "[mid] entering %06x inside a function (from %06x) a3=%06x a6=%06x sp=%06x\n",
+                    addr, g_last_call, M.a[3], M.a[6], SP);
+    }
     if (!fn) { uint32_t t = via_jump_table(addr);
                if (t) { m68k_call(t); return; } }
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x (last %06x, before %06x, depth %d)\n",

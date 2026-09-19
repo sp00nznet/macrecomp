@@ -523,6 +523,25 @@ def disasm_one(code, pc):
     return None
 
 
+# A 68000 fetches instructions on word boundaries, so every branch, bsr, jsr and
+# jmp target inside a segment is even. capstone will happily decode a desynced
+# stream into something that *looks* like `bra $2e07`, and that odd target is
+# proof the bytes are not an instruction: the decode started mid-instruction,
+# or walked into data. Same argument as not_68000() -- an architectural
+# impossibility, not a heuristic.
+_BR_TARGET = re.compile(r"\$([0-9a-fA-F]+)(?:\(pc\))?$")
+_BIT_OPS = ("bchg", "bclr", "bset", "btst", "bfins", "bfextu", "bfexts",
+            "bfclr", "bfset", "bftst", "bfffo", "bkpt")
+def odd_branch_target(ins):
+    mn = ins.mnemonic.split(".")[0]
+    if mn in _BIT_OPS:
+        return False
+    if not (mn in ("jmp", "jsr", "bsr") or (mn.startswith("b") and len(mn) >= 3)):
+        return False
+    m = _BR_TARGET.fullmatch(norm_op(ins.op_str))
+    return bool(m) and (int(m.group(1), 16) & 1)
+
+
 def decode_stream(code, start, end, resync):
     """Linear decode of [start,end), re-synchronised at known branch targets.
 
@@ -540,6 +559,8 @@ def decode_stream(code, start, end, resync):
     while pc<end:
         ins=disasm_one(code,pc)
         if ins is None or ins.address!=pc:
+            stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2; continue
+        if odd_branch_target(ins):
             stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2; continue
         split=[t for t in resync if pc < t < pc+ins.size]
         if split:

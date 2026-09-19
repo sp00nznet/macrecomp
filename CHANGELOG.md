@@ -8,6 +8,24 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **257 branches to odd addresses, across 75 functions, were being lifted as
+  code.** A 68000 fetches on word boundaries, so every `bra`/`bsr`/`jsr`/`jmp`
+  target inside a segment is even. capstone will still decode a desynced
+  stream into something that reads as `bra $2e07`, and that odd target is
+  proof the bytes are not an instruction -- the decode began mid-instruction or
+  walked into data. `decode_stream` now records such a word as data and
+  resumes after it, the same architectural-impossibility argument
+  `not_68000()` already makes for a function start.
+
+  `fn_3_2dfe` was the clearest case: no `link`, no `movem`, a branch to
+  `0x2e07`, and it clobbered D5/D6 every time it ran. After the rule the whole
+  build has **0** odd code targets (was 257), `find_entries.py` still reports
+  0 unreachable targets, and the run has 0 entry misses. The catalog renders
+  byte-identically, so nothing regressed.
+
+
+### Fixed
+
 - **A dialog left its pixels on the screen for good.** `qd_fb` is an overlay --
   a set pixel wins over whatever the title drew into its own screen memory --
   and `dlg_dispose` only marked the slot free. Everything an alert painted
