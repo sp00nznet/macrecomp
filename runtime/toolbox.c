@@ -677,6 +677,18 @@ void m68k_trap(uint16_t raw){
          * itself reached only when it is already 1. Forcing it says whether the
          * rest of the pipeline -- expand, composite, blit -- is sound. */
         if(getenv("MRFORCEMODE") && M.a[5]) m68k_w16(M.a[5]-0x1022u, 1);
+        /* MRFORCECARD: a PROBE, not a fix. HyperCard's card-click handler
+         * (fn_16_4fd6) bails when a5-0x2396, the current card id, is zero --
+         * and nothing ever sets it. a5-0x990 holds the id of the stack's first
+         * card, which HyperCard reads out of the STAK header correctly. Copying
+         * one to the other says whether the rest of the pipeline -- display and
+         * click dispatch -- is sound, or whether the model is wrong. */
+        if(getenv("MRFORCECARD") && M.a[5]){
+            uint32_t first = m68k_r32(M.a[5]-0x990u);
+            if(first && !m68k_r32(M.a[5]-0x2396u)) m68k_w32(M.a[5]-0x2396u, first);
+            /* The same handler ORs in a5-0xb2f, which is set to 1 during
+             * start-up and never cleared; either one alone drops the click. */
+            m68k_w8(M.a[5]-0xb2fu, 0); }
         int peek = (w == 0xA971);
         /* MRCLICK=x,y[,n]: click x,y after n trips round the title's OWN event
          * loop (default 200). Counted here rather than in the platform layer,

@@ -319,13 +319,28 @@ Four things are now ruled out by measurement, so none needs redoing:
   (`a5-0x1314` = 0x843da0) holds a correct, full-width **512x342 window frame**
   -- title bar, border, drop shadow, empty interior. Geometry right, content
   absent.
-- **The blit to the screen truncates every row.** Guest screen memory
-  (0x800100, rowBytes 64) receives that frame only **344 pixels wide** -- 43
-  bytes, which is `342/8` rounded up, i.e. a rowBytes computed from the screen
-  *height*. `ScreenRow` (0x106) is 64 and nothing overwrites it; the QuickDraw
-  port is set up with the right bounds; the dirty rect at `a5-0x1d0a` reads
-  (0,0,0,0). Where the 43 comes from is not yet found, and it is the most
-  self-contained defect left.
+- **The blit to the screen truncated every row -- found and fixed.** Guest
+  screen memory was receiving the frame only 344 pixels wide (43 bytes, i.e.
+  `342/8` rounded up). The cause was `rect_set`, which takes
+  `(left, top, right, bottom)` and was being passed `(0, 0, height, width)` at
+  four sites, so every window's `portRect` came out 342 wide and 512 tall.
+  Fixed; the screen spans x 0..511 again.
+- **The composite runs, and the dirty rect is real.** `a5-0x1d0a` is written
+  22,138 times a run and twice holds the whole card, (0,0,342,512). An earlier
+  note here said it read (0,0,0,0) -- that was a snapshot taken at the blit's
+  entry, after it had been consumed, and was wrong.
+- **The block cache works.** A whole run makes 29 file reads and reads
+  `CARD 5341` twice; the master index entry for it (`0x000158dd` -> offset
+  0x2b00) is well formed and HyperCard indexes it correctly as `id >> 8`.
+- **Forcing the gates open does not help.** `MRFORCECARD` copies the first
+  card's id (which HyperCard has, at `a5-0x990` = 5341) into `a5-0x2396` and
+  clears `a5-0xb2f`. Both gates in `fn_16_4fd6` then pass and the click still
+  does nothing, so those two flags are necessary but not sufficient and the
+  model of that handler is incomplete.
+- **Home's own first card is nearly blank by design** -- a 416-byte `BMAP`,
+  one button and two fields -- so an empty-looking window here is not by
+  itself evidence of a render fault. The catalogue's Table of Contents card
+  carries a 14 KB bitmap and is the right thing to judge rendering by.
 
 Dump either side with `MRBMSHOT=843da0:64:342:buf.pgm` (the buffer, correct)
 and `MRBMSHOT=800100:64:342:scr.pgm` (the screen, truncated).
