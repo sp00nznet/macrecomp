@@ -333,9 +333,18 @@ Clicks reach the card. `MRCLICK=x,y[,n]` synthesises one, and a click on the
 first Table of Contents button (rect t=81 l=2 b=112 r=185) makes HyperCard
 search its stacks -- twenty names, NOMADICS through QUICK SEARCH -- so the
 button's script runs. It does not arrive: the catalog's own script fails to
-parse with `Can't understand what's after "if"`, which is the same shape as the
-`end` error fixed earlier in the lifter and probably has the same kind of
-cause.
+parse with `Can't understand what's after "if"`. That one is traced.
+`fn_14_298e` raises it at `seg14+0x2b20`, where it loads the handle at
+`a5-0x551e`, dereferences it, and requires the first word of the block to be
+non-zero. The handle is set -- by `fn_3_0e3a` -- and points at a block whose
+first word reads 0.
+
+Unlike the `end` error this is *not* decode drift, which is worth recording so
+the same search is not repeated: the parser segments contain no unimplemented
+instruction that is ever executed, and the one function that fails the
+callee-saved check, `fn_14_298e` itself, has no `movem` to begin with, so that
+report is a false positive of the same kind as the register-convention leaf
+helpers.
 
 Two root causes had to be fixed before anything could appear:
 
