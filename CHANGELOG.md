@@ -8,6 +8,19 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **Every window's `portRect` was transposed.** `rect_set` takes
+  `(left, top, right, bottom)`, and four call sites passed it
+  `(0, 0, height, width)` -- so on a 512x342 screen every window came out
+  **342 wide and 512 tall**. A title that sizes its own blit from `portRect`
+  then writes 43-byte rows into a 64-byte framebuffer, which is exactly how
+  HyperCard's window came to be clipped to the left two-thirds of the screen
+  while its own offscreen buffer held the full-width picture.
+
+  With it fixed the screen spans all 512 pixels again: guest screen memory
+  goes from x 0..341 to x 0..511 and from 10,267 lit pixels to **17,657**.
+  `NewWindow`, `GetNewWindow`, the Dialog Manager's window rect and the
+  window-bounds table were all affected.
+
 - **Standing the catalogue in for `Home` was itself causing a crash.** With the
   catalogue's Table of Contents stack renamed to `Home`, HyperCard's start-up
   leaves a byte tag at `a5-0x49aa` at 0, `fn_9_1670` dispatches on 1..4 only,

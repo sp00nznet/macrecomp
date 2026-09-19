@@ -100,7 +100,7 @@ static Rect g_win_bounds[MAX_WINS];
 static int win_index(uint32_t w){
     for(int i=0;i<g_nwins;i++) if(g_wins[i]==w) return i;
     if(g_nwins < MAX_WINS){ g_wins[g_nwins]=w; g_win_pending[g_nwins]=0;
-        rect_set(&g_win_bounds[g_nwins],0,0,QD_H,QD_W); return g_nwins++; }
+        rect_set(&g_win_bounds[g_nwins],0,0,QD_W,QD_H); return g_nwins++; }
     return -1;
 }
 /* Record the clip in the current port so SetPort can restore it. */
@@ -313,7 +313,7 @@ static uint32_t make_dialog(uint32_t dstor, uint32_t ditl, const Rect *bounds){
     uint32_t d = dstor ? dstor : heap_alloc(256);
     if(!d) return 0;
     bitmap_screen(d+2);                                  /* GrafPort.portBits */
-    Rect pr; rect_set(&pr, 0, 0, bounds->bottom-bounds->top, bounds->right-bounds->left);
+    Rect pr; rect_set(&pr, 0, 0, bounds->right-bounds->left, bounds->bottom-bounds->top);
     wr_rect(d+16, &pr);                                  /* GrafPort.portRect */
     uint32_t arena = heap_alloc(DLG_ARENA);
     dlg_new(d, ditl, arena, arena + DLG_ARENA);
@@ -770,7 +770,13 @@ void m68k_trap(uint16_t raw){
         uint32_t bounds=pop32(); uint32_t wstor=pop32();
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect br = bounds?rd_rect(bounds):(Rect){0,0,QD_H,QD_W};
-        Rect pr; rect_set(&pr,0,0,br.bottom-br.top,br.right-br.left);
+        /* rect_set takes (left, top, right, bottom). Passing the height as
+         * the right edge transposes the port: every window came out 342 wide
+         * and 512 tall on a 512x342 screen, and a title that sizes its own
+         * blit from portRect then wrote 43-byte rows into a 64-byte
+         * framebuffer -- which is exactly how HyperCard's card came to be
+         * clipped to the left two-thirds of the screen. */
+        Rect pr; rect_set(&pr,0,0,br.right-br.left,br.bottom-br.top);
         bitmap_screen(w+2);                 /* GrafPort.portBits -> the screen */
         wr_rect(w+16, &pr);                 /* GrafPort.portRect */
         m68k_w32(w+0xFC, refcon);           /* WindowRecord.refCon (approx offset) */
@@ -790,7 +796,7 @@ void m68k_trap(uint16_t raw){
     case 0xA9BD: /*GetNewWindow*/ {
         uint32_t behind=pop32(); (void)behind; uint32_t wstor=pop32(); (void)pop16();
         uint32_t w = wstor ? wstor : heap_alloc(256);
-        Rect pr; rect_set(&pr,0,0,QD_H,QD_W); bitmap_screen(w+2); wr_rect(w+16,&pr);
+        Rect pr; rect_set(&pr,0,0,QD_W,QD_H); bitmap_screen(w+2); wr_rect(w+16,&pr);
         m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, 1); m68k_w8(w+111, 1);
         port_regions(w, &pr);
         win_dirty(w, 1);
