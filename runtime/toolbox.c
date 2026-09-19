@@ -631,6 +631,11 @@ void m68k_trap(uint16_t raw){
     case 0xA970: /*GetNextEvent*/ case 0xA971: /*EventAvail*/ {
         plat_present();                       /* reaching the event loop == booted */
         if(plat_quit_requested()) exit(0);
+        /* MRFORCEMODE: a PROBE, not a fix. HyperCard renders a whole card only
+         * when the word at a5-0x1022 is 1, and every routine that sets it is
+         * itself reached only when it is already 1. Forcing it says whether the
+         * rest of the pipeline -- expand, composite, blit -- is sound. */
+        if(getenv("MRFORCEMODE") && M.a[5]) m68k_w16(M.a[5]-0x1022u, 1);
         int peek = (w == 0xA971);
         uint32_t evp=pop32(); (void)pop16(); int what=0,msg=0,h=0,v=0;
         plat_pump();

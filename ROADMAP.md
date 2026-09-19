@@ -344,5 +344,13 @@ lead into CODE 13 and several of them run constantly, but every one of them is
 gated on the mode already being 1 -- `fn_1_26a2`, which would call the full
 redraw, tests `cmp.w -$1022(a5)` first and is itself never reached.
 
-The open question is what normally drives HyperCard into a card show with a
-mode greater than 3.
+Forcing that word to 1 (`MRFORCEMODE=1`, a probe rather than a fix) shows the
+gate is real and that there is a **second, independent problem behind it**: the
+mode-1 path then runs, the dirty rect fills correctly with (0,0,342,512), and
+the composite executes with it -- and buffer A is *still* empty afterwards. So
+`fn_16_05c0` gets past its `SectRect` and produces nothing.
+
+Two things to find, then, not one:
+
+1. what normally drives HyperCard into a card show with a mode greater than 3;
+2. why the composite writes nothing even when handed the whole card.
