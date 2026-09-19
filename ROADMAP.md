@@ -292,6 +292,35 @@ and HyperCard then resolves the volume with `PBGetCatInfo` and never opens
 that file either. Two independent paths reach "I have a stack name" and both
 stop there, which points at one routine: **open a stack by name**.
 
+**And the catalogue-as-Home build dies three statements into its own script.**
+Tracing the messages it dispatches before the assertion gives, in order:
+`openStack` three times (the chain), then `hide`, then `put` -- and then
+`ALRT 3003`, *"Unexpected error 69320382"*, and `ExitToShell`. The catalogue's
+stack script begins:
+
+    on openStack
+      global curSnd, sndRefNum
+      hide menuBar          <- runs, low memory 0x0BAA is written
+      put 0 into sndRefNum  <- this is where it stops
+      put empty into curSnd
+    end openStack
+
+So `hide menuBar` succeeds and the *first* `put` into a **global** is what
+kills it. The assertion is `fn_9_1670` dispatching on the object-type byte
+`a5-0x49aa`, which handles only 1..4 -- in that build the byte reaches 5 and
+then 0, and a global variable is not an object at all, so 0 is what a
+container-resolution for a global would leave behind. In the real-Home build
+the same byte only ever takes 1,2,3,4 and no assertion fires, so this is
+specific to resolving that global, not to globals in general (Home's own
+`getHomeInfo` declares and uses them happily).
+
+That makes two separate faults, both now pinned to a statement:
+
+1. **real Home**: the button's script runs and `go to stack "Whole Earth"`
+   resolves to nothing without touching the file system.
+2. **catalogue as Home**: `put 0 into sndRefNum` in the catalogue's own
+   `openStack` trips HyperCard's assertion and it quits.
+
 Worth knowing for that hunt: the EWEC Home stack's search paths still name the
 authoring machine's volumes (`Lazarus:Stacks for B13.1`, `HyperCard
 Help:Help Stacks`), not this volume, which is called `Untitled`.
