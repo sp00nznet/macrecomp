@@ -371,6 +371,27 @@ compares the destination name against `a5-0x9fe` and answers "is this the
 stack we are already in". So the chain to read next is
 `fn_21_04a6 + 0x83a` onwards, with `MRBRK=6504a6`.
 
+**Both routes fail in the same place, and it is one defect.** The only three
+call sites of the Open glue (`jt 0x2a2` = `fn_1_4798`) are in `fn_21_1bec`
+(twice) and `fn_21_1e1e` (once). Measured:
+
+| | baseline | with the menu's Open Stack | with a click on the button |
+|---|---|---|---|
+| `jt 0x2a2` (the glue) | 2 | **2** | 2 |
+| `fn_21_1bec` | 2 | **2** | 2 |
+| `fn_21_1e1e` (stack opener) | 2 | **2** | 2 |
+
+Neither route ever reaches HyperCard's stack opener. `fn_21_1e1e` is called
+from `fn_21_04a6` at `0x055c` only when `d4` is non-zero at `0x0520`, and `d4`
+is the inverse of `fn_21_3978` -- which answers "same stack" when the
+destination name's length byte is zero. So in **both** cases the destination
+descriptor reaches the resolver with an empty name: the `go` command builds
+one from the parse pool, *File > Open Stack* builds one from the `SFReply`,
+and both come out nameless.
+
+That is a single defect with two symptoms, not two problems. Whatever
+populates a destination descriptor's name field is not doing it.
+
 **The same symptom appears on the other route in.** Driving *File > Open
 Stack...* through the menu gets as far as Standard File, which `MRDOC` answers
 with a well-formed `SFReply` -- `good`=1, type `STAK`, name `Whole Earth` --
