@@ -24,6 +24,12 @@ typedef struct M68K {
 extern M68K M;
 #define SP (M.a[7])
 
+/* 0 is a real address a stray pointer writes to, and those writes are worth
+ * seeing, so "off" cannot be 0. */
+#define MR_WATCH_OFF 0xFFFFFFFFu
+extern uint32_t g_watch_addr;
+void mr_watch_hit(uint32_t addr, uint32_t val);
+
 /* ---- big-endian memory access (bounds-checked: 24-bit space masked into
  * M.mem; out-of-range reads yield 0 and writes are dropped, so a stray pointer
  * degrades gracefully instead of segfaulting) ---- */
@@ -31,21 +37,21 @@ static inline int m68k_ok(uint32_t a){ return a < M.memsize; }
 static inline uint32_t m68k_r8 (uint32_t a){ return m68k_ok(a)?M.mem[a]:0; }
 static inline uint32_t m68k_r16(uint32_t a){ return ((uint32_t)m68k_r8(a)<<8)|m68k_r8(a+1); }
 static inline uint32_t m68k_r32(uint32_t a){ return (m68k_r16(a)<<16)|m68k_r16(a+2); }
-static inline void m68k_w8 (uint32_t a,uint32_t v){ if(m68k_ok(a)) M.mem[a]=(uint8_t)v; }
+static inline void m68k_w8 (uint32_t a,uint32_t v){
+    if(m68k_ok(a)) M.mem[a]=(uint8_t)v;
+    /* Reported after the store, and the handler reads the whole longword back:
+     * the watch sits on byte writes so that it catches everything, but a
+     * longword store arrives here one byte at a time and the byte at the
+     * watched address is the most significant one. Reporting that byte alone
+     * makes every write to a heap pointer look like a write of zero. */
+    if (a == g_watch_addr && g_watch_addr != MR_WATCH_OFF) mr_watch_hit(a, v); }
 static inline void m68k_w16(uint32_t a,uint32_t v){ m68k_w8(a,v>>8); m68k_w8(a+1,v); }
 /* MRWATCHADDR=<hex>: report every longword write to one guest address, with
  * the function that made it. "Who set this global?" is otherwise unanswerable
  * when nothing stores to it at a literal offset -- the write comes through a
  * register, a Toolbox trap, or a struct copy. Zero (the default) costs one
  * compare against a global per 32-bit write. */
-/* 0 is a real address a stray pointer writes to, and those writes are worth
- * seeing, so "off" cannot be 0. */
-#define MR_WATCH_OFF 0xFFFFFFFFu
-extern uint32_t g_watch_addr;
-void mr_watch_hit(uint32_t addr, uint32_t val);
-static inline void m68k_w32(uint32_t a,uint32_t v){
-    if (a == g_watch_addr && g_watch_addr != MR_WATCH_OFF) mr_watch_hit(a, v);
-    m68k_w16(a,v>>16); m68k_w16(a+2,v); }
+static inline void m68k_w32(uint32_t a,uint32_t v){ m68k_w16(a,v>>16); m68k_w16(a+2,v); }
 
 /* ---- sign helpers ---- */
 static inline int32_t sx8 (uint32_t v){ return (int8_t)v; }

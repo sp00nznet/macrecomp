@@ -70,12 +70,24 @@ static void port_regions(uint32_t p, const Rect *r){
         rgn_put(rgn, r);
     }
 }
+/* Every window, not just the front one. A title can have several open and
+ * paints each from its own update event; tracking one meant only one of
+ * HyperCard's four was ever told to repaint -- and it was not the card. */
+#define MAX_WINS 32
+static uint32_t g_wins[MAX_WINS]; static int g_nwins;
+static int g_win_pending[MAX_WINS];
+static int win_index(uint32_t w){
+    for(int i=0;i<g_nwins;i++) if(g_wins[i]==w) return i;
+    if(g_nwins < MAX_WINS){ g_wins[g_nwins]=w; g_win_pending[g_nwins]=0; return g_nwins++; }
+    return -1;
+}
 static void win_dirty(uint32_t w, int dirty){
     if(!w) return;
     uint32_t rgn = m68k_r32(w + WR_UPDATERGN);
     if(!rgn){ rgn = rgn_alloc(); if(!rgn) return; m68k_w32(w + WR_UPDATERGN, rgn); }
-    if(dirty){ Rect r = rd_rect(w + 16); rgn_put(rgn, &r); }      /* portRect */
-    else { Rect z = {0,0,0,0}; rgn_put(rgn, &z); }
+    int i = win_index(w);
+    if(dirty){ Rect r = rd_rect(w + 16); rgn_put(rgn, &r); if(i>=0) g_win_pending[i]=1; }
+    else { Rect z = {0,0,0,0}; rgn_put(rgn, &z); if(i>=0) g_win_pending[i]=0; }
 }
 static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
 /* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
@@ -579,11 +591,19 @@ void m68k_trap(uint16_t raw){
          * draw. Deliver it once per exposure -- clearing on delivery rather
          * than waiting for BeginUpdate means an app that never calls
          * BeginUpdate cannot spin on it. */
-        if(!got && g_update_pending && g_front_win){
-            what = 6 /*updateEvt*/; msg = (int)g_front_win; got = 1;
-            if(!peek) g_update_pending = 0;   /* a peek must not consume it */
-            if(getenv("MRTRACE")) fprintf(stderr,"  updateEvt -> window %06x%s\n",
-                (unsigned)g_front_win, peek?" (peek)":"");
+        if(!got){
+            /* One update per dirty, visible window. The pending flag is the
+             * gate rather than the region itself, so a title that ignores the
+             * event is not handed it again for ever. */
+            for(int i=0;i<g_nwins;i++){
+                uint32_t wp = g_wins[i];
+                if(!wp || !g_win_pending[i] || !m68k_r8(wp+110)) continue;
+                what = 6 /*updateEvt*/; msg = (int)wp; got = 1;
+                if(!peek) g_win_pending[i] = 0;
+                if(getenv("MRTRACE")) fprintf(stderr,"  updateEvt -> window %06x%s\n",
+                    (unsigned)wp, peek?" (peek)":"");
+                break;
+            }
         }
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
                  int mh,mv; plat_get_mouse(&mh,&mv); m68k_w16(evp+10,mv); m68k_w16(evp+12,mh);
@@ -647,7 +667,7 @@ void m68k_trap(uint16_t raw){
      * whole point of them. A no-op leaves the window permanently dirty, and an
      * application that validates and then re-checks spins for ever. */
     case 0xA92A: /*ValidRect*/ case 0xA929: /*ValidRgn*/
-        (void)pop32(); win_dirty(g_front_win, 0); break;
+        (void)pop32(); win_dirty(g_cur_port, 0); break;
     /* Anything that exposes window content owes the app an update event; there
      * is no real window server here to raise one. */
     /* Showing or selecting a window says which one is front far more reliably
@@ -656,10 +676,15 @@ void m68k_trap(uint16_t raw){
      * the title is not drawing into. */
     case 0xA91F: /*SelectWindow*/ case 0xA915: /*ShowWindow*/ {
         uint32_t w = pop32();
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] %s %06x\n",
+            w==0?"Show/Select NULL":(norm(raw)==0xA915?"ShowWindow":"SelectWindow"), (unsigned)w);
         if(w){ g_front_win = w; m68k_w8(w+110, 1); m68k_w8(w+111, 1); win_dirty(w, 1); }
         g_update_pending = 1; } break;
+    /* Inval/Valid apply to the CURRENT PORT, not to whichever window is front:
+     * validating one window was clearing another's pending update, so the card
+     * window never got told to repaint. */
     case 0xA928: /*InvalRect*/  case 0xA927: /*InvalRgn*/
-        (void)pop32(); win_dirty(g_front_win, 1); g_update_pending = 1; break;
+        (void)pop32(); win_dirty(g_cur_port, 1); break;
     /* BeginUpdate leaves the region set: the app is about to ask whether there
      * is anything to draw, and EndUpdate is where it stops being dirty. */
     case 0xA922: /*BeginUpdate*/ { uint32_t w = pop32();
@@ -1002,7 +1027,9 @@ void m68k_trap(uint16_t raw){
 
     /* ---- Memory Manager (register-based) ---- */
     case 0xA11E: /*NewPtr (and Clear/Sys variants)*/
-        { M.a[0]=heap_alloc(M.d[0]?M.d[0]:16); M.d[0]=M.a[0]?0:-108; } break;
+        { uint32_t want=M.d[0]; M.a[0]=heap_alloc(want?want:16); M.d[0]=M.a[0]?0:-108;
+          if(getenv("MRHEAP")) fprintf(stderr,"  NewPtr %u -> %06x  (slot %06x)\n",
+              (unsigned)want, (unsigned)M.a[0], (unsigned)SP); } break;
     case 0xA122: /*NewHandle (and Clear/Sys variants)*/
         { uint32_t sz=M.d[0]; uint32_t p=heap_alloc(sz?sz:16); uint32_t hh=heap_alloc(4);
         if(hh){ m68k_w32(hh,p); hsz_set(hh,sz); } M.a[0]=hh; M.d[0]=hh?0:-108; } break;

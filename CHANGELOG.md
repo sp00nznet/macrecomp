@@ -72,6 +72,11 @@ All notable changes to this project are documented here. Format follows
   `SelectWindow`, `InvalRect`, `InvalRgn` and a new window now queue one, and it
   is delivered once per exposure -- cleared on delivery rather than on
   `BeginUpdate`, so a title that never calls `BeginUpdate` cannot spin on it.
+- **Update events are now delivered per window.** A title can have several
+  windows open and paints each from its own update event; tracking only "the
+  front one" meant just one of HyperCard's five was ever told to repaint.
+- **`InvalRect`/`ValidRect` apply to the current port**, not to whichever window
+  is front. Validating one window was clearing another's pending update.
 - **`ValidRect` and `ValidRgn` validated nothing.** Removing area from the
   update region is the whole point of them; as no-ops they left the window
   permanently dirty, which matters as soon as the update region is real.

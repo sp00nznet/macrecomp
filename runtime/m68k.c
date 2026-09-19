@@ -116,8 +116,8 @@ static uint32_t via_jump_table(uint32_t addr) {
 
 uint32_t g_watch_addr = MR_WATCH_OFF;
 void mr_watch_hit(uint32_t addr, uint32_t val){
-    fprintf(stderr, "[watch] %06x <- %08x  in %06x (called from %06x)\n",
-            addr, val, g_last_call, g_prev_call);
+    fprintf(stderr, "[watch] %06x byte %02x, long now %08x  in %06x (from %06x)\n",
+            addr, (unsigned)(val & 0xFFu), m68k_r32(addr), g_last_call, g_prev_call);
 }
 
 volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
@@ -162,6 +162,10 @@ static jmp_buf g_unwind[MAX_UNWIND];
 /* Unwind to the frame that pushed this sentinel. Returning to our own frame is
  * an ordinary return and needs no help. */
 static void unwind_to(int depth){
+    /* MRNOUNWIND=1 falls back to the old behaviour, for bisecting. */
+    { static int off = -1;
+      if(off < 0) off = getenv("MRNOUNWIND") != 0;
+      if(off) return; }
     if(depth < 0 || depth >= MAX_UNWIND) return;
     if(depth >= g_shadow_sp - 1) return;          /* our own frame: normal */
     g_shadow_sp = depth + 1;
