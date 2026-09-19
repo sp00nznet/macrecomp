@@ -570,7 +570,15 @@ void m68k_trap(uint16_t raw){
     case 0xA8A9: /*InsetRect*/ { int16_t dv=pop16(),dh=pop16(); uint32_t rp=pop32();
         Rect rr=rd_rect(rp); rect_inset(&rr,dh,dv); wr_rect(rp,&rr); } break;
     case 0xA8AA: /*SectRect*/ { uint32_t dst=pop32(),b=pop32(),a=pop32();
-        Rect ra=rd_rect(a),rb=rd_rect(b),o; int nz=rect_sect(&ra,&rb,&o); if(nz)wr_rect(dst,&o);
+        Rect ra=rd_rect(a),rb=rd_rect(b),o; int nz=rect_sect(&ra,&rb,&o);
+        /* An empty intersection still writes the destination -- Inside Mac
+         * specifies (0,0,0,0). Leaving it alone hands the caller whatever was
+         * there before. */
+        if(!nz) rect_set(&o,0,0,0,0);
+        if(dst) wr_rect(dst,&o);
+        if(getenv("MRGFX")){ static int n; if(n++<20)
+            fprintf(stderr,"[gfx] SectRect (%d,%d,%d,%d) x (%d,%d,%d,%d) -> %d\n",
+                ra.top,ra.left,ra.bottom,ra.right, rb.top,rb.left,rb.bottom,rb.right, nz); }
         ret16(nz?1:0); } break;
     case 0xA8AB: /*UnionRect*/ { uint32_t dst=pop32(),b=pop32(),a=pop32();
         Rect ra=rd_rect(a),rb=rd_rect(b),o; rect_union(&ra,&rb,&o); wr_rect(dst,&o); } break;
@@ -774,6 +782,9 @@ void m68k_trap(uint16_t raw){
         if(h) m68k_w32(h,p2); m68k_w32(SP,h); } break;
     case 0xA8EA: /*SetStdProcs*/ (void)pop32(); break;   /* no custom drawing hooks */
     case 0xA8AE: /*EmptyRect*/ { Rect r=rd_rect(pop32());
+        if(getenv("MRGFX")){ static int n; if(n++<25)
+            fprintf(stderr,"[gfx] EmptyRect %d,%d,%d,%d -> %d\n",
+                r.top,r.left,r.bottom,r.right,rect_empty(&r)); }
         ret16((uint16_t)(r.right<=r.left || r.bottom<=r.top)); } break;
     case 0xA919: /*GetWTitle*/ { uint32_t nm=pop32(); (void)pop32();
         if(nm) m68k_w8(nm,0); } break;                  /* untitled: one port */

@@ -28,6 +28,13 @@ All notable changes to this project are documented here. Format follows
   Toolbox calls with a parse error to **running clean with no errors at all**.
   `go to next card` also stopped failing (`Unexpected error 836587`).
 
+- **`SectRect` left its destination unwritten when the rectangles did not
+  intersect.** Inside Macintosh specifies (0,0,0,0); leaving it alone hands the
+  caller whatever happened to be there.
+- `MRGFX` now reports `SetPort` with the bitmap it draws into, each `DrawChar`
+  with its pen position, and the first `EmptyRect`/`SectRect` calls with their
+  operands. Between them these turn "nothing is drawn" into a specific claim
+  about which decision skipped the drawing.
 - `MRWATCH` now also reports a callee that fails to preserve D3-D7 or A2-A4.
   Mac Pascal preserves them across a call, so a lifted function that returns
   with one altered has corrupted a value its caller still holds -- which shows
