@@ -320,6 +320,23 @@ lifter and HAL from overfitting to one binary.
 - The manager table in `scan_traps.py` is hand-maintained. It places every trap
   the two scanned titles use; new titles may add unclassified names.
 
+## The Electronic Whole Earth Catalog renders
+
+HyperCard 1.2.2 opens the catalog's `WHOLE EARTH` stack and draws its Table of
+Contents card on screen: the globe, the heading, the "INTRODUCTION &" banner and
+the contents icons. The top of the card paints; the lower part does not yet.
+
+Two root causes had to be fixed before anything could appear:
+
+- **Pascal Booleans.** A Boolean result occupies the two-byte result slot but is
+  read as a byte at the slot's address -- `move.b (a7)+,d0` takes the *high*
+  byte. Returning it in the low byte made `SectRect` and every other Boolean
+  trap answer false, and HyperCard's card composite exits early when `SectRect`
+  says the rects miss.
+- **`ScreenRow`** (low memory 0x106) was never set. A title that blits with its
+  own code steps rows by `base + row * ScreenRow`; at zero every row lands on
+  the first.
+
 ## Where HyperCard 1.2.2 stops
 
 The HyperTalk parse error is fixed; HyperCard runs clean on the unmodified Home
