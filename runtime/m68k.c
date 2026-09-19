@@ -98,7 +98,7 @@ void m68k_jt_call(uint32_t a5off) {
                                    want = e ? (uint32_t)strtoul(e,0,16) : 0; }
         if (want && a5off == want) {
             static int said = 0;
-            if (said++ < 3) fprintf(stderr, "[jt] A5+%x -> %06x (from %06x)\n",
+            if (said++ < 200000) fprintf(stderr, "[jt] A5+%x -> %06x (from %06x)\n",
                                     a5off, addr, g_last_call); } }
     if (addr) m68k_call(addr);
     else fprintf(stderr, "m68k_jt_call: unmapped A5+%x\n", a5off);

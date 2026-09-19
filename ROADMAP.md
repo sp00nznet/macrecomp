@@ -263,93 +263,41 @@ landing in Standard File, which `MRDOC` answers with a well-formed `SFReply`:
 `good`=1, type `STAK`, vRefNum -1 (which is what this File Manager reports),
 name `WHOLE EARTH`.
 
-**Where it stops now: HyperCard has no current card.**
+**Where it stops now: the object hit-test finds nothing.**
 
-The click is not being lost in the HAL. Traced trap by trap, it goes all the
-way in: `IsDialogEvent` (false, no dialog exists), `FindWindow` -> inContent
-and the *card* window, `SetPort`, `GlobalToLocal`, then HyperCard's own event
-dispatcher `fn_1_1d52` takes the mouseDown arm at `0x1e78`, resolves the part
-code to inContent at `0x2010`, matches the window against `a5-0x1234` -- its
-card window -- and calls `fn_1_1cb0`. Both gates there pass (`a5-0x100f` = 1,
-`a5-0x1020` = 1), so it calls `jt 0x1722` = `fn_16_4fd6`, the card-click
-handler.
+The click is not lost in the HAL. Traced trap by trap it goes the whole way:
+`IsDialogEvent` false, `FindWindow` inContent on the card window, `SetPort`,
+`GlobalToLocal`, HyperCard's dispatcher `fn_1_1d52` taking its mouseDown arm,
+matching the window against `a5-0x1234`, `fn_1_1cb0` (both gates pass),
+`jt 0x1722` = `fn_16_4fd6`, and on past it -- that one is the *editing*
+handler, not the browse one -- into `fn_1_1cce`, which reads the mode word
+`a5-0x1020` (= 1) and calls **`fn_1_08a4`, the browse-tool click handler.
+That runs, twice, once for the press and once for the release.**
 
-`fn_16_4fd6` begins:
+`fn_1_08a4` asks `fn_1_1536` what object is under the point. **It answers
+"nothing."** So HyperCard takes the not-found arm at `0x08f0`, and sends
+`mouseDown` (the Pascal string at `seg1+0x96e`) to the *card* rather than to
+the button -- `fn_1_2548`, ten times a run. That is the whole reason a click
+on a button does nothing: the button is never identified as the target.
 
-    4fde  tst.l  -$2396(a5)      ; the current card
-    4fe2  seq.b  d0
-    4fe4  or.b   -$b2f(a5), d0
-    4fe8  andi.w #$1, d0
-    4fec  beq.b  $4ff2           ; have a card -> handle the click
-    4fee  bra.w  $50da           ; else -> drop it
+The hit-test comes up empty because HyperCard has no current card object.
+`a5-0x2396` (card) and `a5-0x239a` (background) are both null; each is written
+exactly twice a run, both zero, both at start-up. The only routine that sets
+them is `fn_16_2416`, reachable only through `jt 0x1602` (`fn_16_1338`, which
+calls it when its byte argument is non-zero) and `jt 0x161a` -- and both of
+those are called only from the two menu command dispatchers, `fn_1_214a` and
+`fn_13_49f6`. Neither runs unless a menu item is chosen. So in the reachable
+call graph, "enter a card" is a *menu* operation, and whatever the stack-open
+path normally does to display the first card is not happening.
 
-**`a5-0x2396` is null.** It is written exactly twice in a run, both zero, both
-during start-up in `CODE 3` -- and never again. Every routine that sets it
-(`fn_16_2416` = `jt 0x161a`, `fn_21_56f6` = `jt 0x225a`, `fn_3_215a`) is never
-called. So HyperCard opens the stack, reads its blocks, makes its five windows
-and idles, but never establishes a current card object, and every click on the
-card is discarded on that first test.
+`MRFORCECARD=<bkgd id>` probes this: it copies the first card's id from
+`a5-0x990` (5341, which HyperCard reads correctly from the `STAK` header) into
+`a5-0x2396` and the background id into `a5-0x239a`. That changes behaviour --
+the not-found dispatches drop from 10 to 6 -- so the globals are genuinely
+part of it, but ids alone are not enough: what the hit-test wants is the
+loaded card *object*, not two numbers. Card 5341's block names its background
+at +0x20 (2282), which is where the probe's argument comes from.
 
-This is *not* specific to which stack is open: the catalogue-as-Home build,
-the one whose card art did reach the screen, leaves `a5-0x2396` null too. The
-card gets painted through the update path (`fn_21_633a` -> the WOBA expander),
-which does not need the card object; clicking does.
-
-Pushing on that: the routines that set the current card hang off HyperCard's
-**menu command dispatcher** `fn_1_214a`, reached through a PC-relative jump
-table (`4EFB` at `seg1+0x2360`; the lifter follows it correctly, the table
-bytes merely disassemble as nonsense). Driving the menu works all the way
-down -- `MRMENU=4,6` (Go > First) resolves the item name out of the `MENU`
-resource, reaches `fn_1_214a` with menu 4 item 6, dispatches through
-`jt 0x1642` = `fn_16_2c52` (the Go command), its own item table, `jt 0x2092`
-= `fn_21_133e`, and `fn_21_0fcc`, the navigation executor, which runs **six
-times a run**. `a5-0x2396` stays null throughout.
-
-Four things are now ruled out by measurement, so none needs redoing:
-
-- **The card list is built.** With the real Home open, HyperCard reads `MAST`
-  (0x1800), `LIST` (0x1a00), `PAGE` (0x1a80) and the `CARD` blocks themselves
-  -- `CARD 5341` at 0x2b00, `CARD 3011` at 0x40c0 -- all at the right offsets
-  and full length. The stack header says five cards and first card id 5341,
-  and that is what it reads.
-- **The renderer runs, hard.** `fn_16_402e` is entered **41,896** times and
-  the WOBA expander `fn_21_59e2` fourteen times in a hundred seconds. This is
-  not a title sitting idle.
-- **What it renders is an empty window.** The expander's output buffer
-  (`a5-0x1314` = 0x843da0) holds a correct, full-width **512x342 window frame**
-  -- title bar, border, drop shadow, empty interior. Geometry right, content
-  absent.
-- **The blit to the screen truncated every row -- found and fixed.** Guest
-  screen memory was receiving the frame only 344 pixels wide (43 bytes, i.e.
-  `342/8` rounded up). The cause was `rect_set`, which takes
-  `(left, top, right, bottom)` and was being passed `(0, 0, height, width)` at
-  four sites, so every window's `portRect` came out 342 wide and 512 tall.
-  Fixed; the screen spans x 0..511 again.
-- **The composite runs, and the dirty rect is real.** `a5-0x1d0a` is written
-  22,138 times a run and twice holds the whole card, (0,0,342,512). An earlier
-  note here said it read (0,0,0,0) -- that was a snapshot taken at the blit's
-  entry, after it had been consumed, and was wrong.
-- **The block cache works.** A whole run makes 29 file reads and reads
-  `CARD 5341` twice; the master index entry for it (`0x000158dd` -> offset
-  0x2b00) is well formed and HyperCard indexes it correctly as `id >> 8`.
-- **Forcing the gates open does not help.** `MRFORCECARD` copies the first
-  card's id (which HyperCard has, at `a5-0x990` = 5341) into `a5-0x2396` and
-  clears `a5-0xb2f`. Both gates in `fn_16_4fd6` then pass and the click still
-  does nothing, so those two flags are necessary but not sufficient and the
-  model of that handler is incomplete.
-- **Home's own first card is nearly blank by design** -- a 416-byte `BMAP`,
-  one button and two fields -- so an empty-looking window here is not by
-  itself evidence of a render fault. The catalogue's Table of Contents card
-  carries a 14 KB bitmap and is the right thing to judge rendering by.
-
-Dump either side with `MRBMSHOT=843da0:64:342:buf.pgm` (the buffer, correct)
-and `MRBMSHOT=800100:64:342:scr.pgm` (the screen, truncated).
-
-Knobs added along the way: `MRJT=<hex a5off>` resolves a jump-table call to its
-target, `MRHOLD` sets how long a synthetic press is held, and `FindWindow` now
-answers with the window the point is actually in -- `NewWindow` was given
-global bounds and kept only a local portRect, so every click was attributed to
-whichever window was created last (with HyperCard, a palette).
 
 ### What "on screen and navigable" still needs
 

@@ -686,6 +686,11 @@ void m68k_trap(uint16_t raw){
         if(getenv("MRFORCECARD") && M.a[5]){
             uint32_t first = m68k_r32(M.a[5]-0x990u);
             if(first && !m68k_r32(M.a[5]-0x2396u)) m68k_w32(M.a[5]-0x2396u, first);
+            /* MRFORCECARD=<bkgd id> also fills a5-0x239a, the current
+             * background, which the same handler needs; the card block names
+             * its background at +0x20. */
+            { unsigned bg = (unsigned)atoi(getenv("MRFORCECARD"));
+              if(bg && !m68k_r32(M.a[5]-0x239au)) m68k_w32(M.a[5]-0x239au, bg); }
             /* The same handler ORs in a5-0xb2f, which is set to 1 during
              * start-up and never cleared; either one alone drops the click. */
             m68k_w8(M.a[5]-0xb2fu, 0); }
