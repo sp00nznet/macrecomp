@@ -619,8 +619,8 @@ void m68k_trap(uint16_t raw){
         int h,v; pt_unpack(pt,&h,&v); Rect rr=rd_rect(rp);
         int in = pt_in_rect(h,v,&rr);
         if(in && getenv("MRHIT"))
-            fprintf(stderr, "  [hit] %d,%d in %d,%d,%d,%d\n",
-                    h, v, rr.top, rr.left, rr.bottom, rr.right);
+            fprintf(stderr, "  [hit] %d,%d in %d,%d,%d,%d  (in %06x)\n",
+                    h, v, rr.top, rr.left, rr.bottom, rr.right, g_last_call);
         retbool(in); } break;
 
     /* ---- QuickDraw: drawing ---- */

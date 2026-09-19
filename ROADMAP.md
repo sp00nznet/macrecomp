@@ -263,40 +263,40 @@ landing in Standard File, which `MRDOC` answers with a well-formed `SFReply`:
 `good`=1, type `STAK`, vRefNum -1 (which is what this File Manager reports),
 name `WHOLE EARTH`.
 
-**Where it stops now: the object hit-test finds nothing.**
+**Where it stops now: the button's handler never runs.**
 
-The click is not lost in the HAL. Traced trap by trap it goes the whole way:
-`IsDialogEvent` false, `FindWindow` inContent on the card window, `SetPort`,
-`GlobalToLocal`, HyperCard's dispatcher `fn_1_1d52` taking its mouseDown arm,
-matching the window against `a5-0x1234`, `fn_1_1cb0` (both gates pass),
-`jt 0x1722` = `fn_16_4fd6`, and on past it -- that one is the *editing*
-handler, not the browse one -- into `fn_1_1cce`, which reads the mode word
-`a5-0x1020` (= 1) and calls **`fn_1_08a4`, the browse-tool click handler.
-That runs, twice, once for the press and once for the release.**
+The click machinery is sound end to end. Traced trap by trap and confirmed by
+breakpoint counts that are zero without a click and non-zero with one:
 
-`fn_1_08a4` asks `fn_1_1536` what object is under the point. **It answers
-"nothing."** So HyperCard takes the not-found arm at `0x08f0`, and sends
-`mouseDown` (the Pascal string at `seg1+0x96e`) to the *card* rather than to
-the button -- `fn_1_2548`, ten times a run. That is the whole reason a click
-on a button does nothing: the button is never identified as the target.
+| step | evidence |
+|---|---|
+| event delivered, window resolved | `IsDialogEvent` false, `FindWindow` inContent on the card window |
+| dispatcher takes the mouseDown arm | `fn_1_1d52` -> `fn_1_1cb0` -> `fn_1_1cce`, both gates pass |
+| browse handler runs | **`fn_1_08a4`, twice** (press and release), 0 without a click |
+| the point is right | `a5-0xfda` = `006400f4` = v 100, h 244 |
+| the card is right | `a5-0x9d2` = 0x14dd = **card 5341**, the one with the button |
+| the part is found | `fn_19_120a` walks parts at +0x32, count at +0x24, rect at +6; `PtInRect` answers true for `77,214,124,274` |
+| the button handler runs | **`fn_1_0320`**, which tracks the press (its own `PtInRect` loop) |
+| `mouseDown` is sent | `jt 0xb82` message sends go 34,248 -> **42,007** with the click |
+| `mouseUp` is sent | **`fn_1_020c`, twice** with a click, **zero** without |
 
-The hit-test comes up empty because HyperCard has no current card object.
-`a5-0x2396` (card) and `a5-0x239a` (background) are both null; each is written
-exactly twice a run, both zero, both at start-up. The only routine that sets
-them is `fn_16_2416`, reachable only through `jt 0x1602` (`fn_16_1338`, which
-calls it when its byte argument is non-zero) and `jt 0x161a` -- and both of
-those are called only from the two menu command dispatchers, `fn_1_214a` and
-`fn_13_49f6`. Neither runs unless a menu item is chosen. So in the reachable
-call graph, "enter a card" is a *menu* operation, and whatever the stack-open
-path normally does to display the first card is not happening.
+And then nothing. No file is opened, no Standard File, no error dialog, no
+`STR# 1002` fetch -- the log after the click is empty. HyperCard hands
+`mouseUp` to the Whole Earth button, whose script is
+`on mouseUp / visual effect barn door open / go to stack "Whole Earth" /
+end mouseUp`, and the handler is never entered. An unhandled message passing
+quietly up the chain and off the end is exactly what this looks like.
 
-`MRFORCECARD=<bkgd id>` probes this: it copies the first card's id from
-`a5-0x990` (5341, which HyperCard reads correctly from the `STAK` header) into
-`a5-0x2396` and the background id into `a5-0x239a`. That changes behaviour --
-the not-found dispatches drop from 10 to 6 -- so the globals are genuinely
-part of it, but ids alone are not enough: what the hit-test wants is the
-loaded card *object*, not two numbers. Card 5341's block names its background
-at +0x20 (2282), which is where the probe's argument comes from.
+So the remaining fault is in HyperTalk's **handler lookup for an object's
+script** -- not in the event path, the window routing, the hit-test, the part
+walk, or the message send, all of which are now measured working. Two facts
+to start from: the parser does run (the state byte at `a5-0x49aa` cycles
+through 2,3,4,5 during a run), and the script text is present in the `CARD`
+block, stored inline in the part record after the name.
+
+Note the earlier note in this file that said the hit-test "answers nothing"
+was wrong: the not-found dispatches it was counting (`fn_1_2548`) happen six
+times a run with no click at all.
 
 
 ### What "on screen and navigable" still needs
