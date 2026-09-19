@@ -285,21 +285,29 @@ HyperCard carries on idling quite happily (1.2 million traps after the click),
 so it has not crashed or hung; the `go` simply resolves to nothing and gives
 up without asking the file system anything.
 
-**And the reason it gives up: the destination record is empty.** Dumping the
-record `fn_21_04a6` is handed at the click (`MRBRK=6504a6
-MRBRKMEM=<record>:6`) gives all zeros -- no kind, and no name. The record
-begins with the destination's name as a Pascal string (`fn_21_3978` tests
-byte 0 as a length and compares the whole thing against `a5-0x9fe`, "is this
-the stack we are already in"), and for this click it should read
-`0b57686f 6c652045 61727468` = `Whole Earth`. It reads zero.
+**The `go` command itself is `fn_12_11c2`, in CODE 12.** It is reached
+through `jt 0x207a`, whose only caller is in that segment; none of the five
+direct callers of `fn_21_0fcc` moves with a click, which is why this took a
+while to find. It builds a destination record in `-$5c(a6)`, classifies the
+destination with `jt 0x8f2`, and dispatches:
 
-So the `go` command executes with an **empty destination**. The stack name
-from the script never reaches the record, which is why the resolver answers
-false, why no file is ever opened, and why nothing is reported: there is
-nothing to report, HyperCard was asked to go nowhere. The fault is therefore
-in evaluating the `go` command's argument -- turning `stack "Whole Earth"`
-into a destination -- and not in the resolver, the file layer, or the
-navigator, all of which behave correctly given what they are handed.
+| `jt 0x8f2` | arm | what it does |
+|---|---|---|
+| 1 | `0x11e8` | kind 1; name into `-$15c(a6)` via **`jt 0x146a`**, then `jt 0x1fb2` |
+| 2 | `0x120c` | kind 1; `jt 0x144a` into `-$56(a6)` |
+| 3 | `0x121e` | kind 2; `jt 0x144a` into `-$52(a6)` |
+| 4 | `0x1232` | `jt 0x1452` over the whole record |
+| else | `0x1242` | straight to the navigator with the record as-is |
+
+**A click takes arm 1**: `jt 0x146a` goes from 1 call to 2. So the command
+runs, classifies, and fetches a name. `fn_21_04a6` then dispatches on the
+record's kind byte, and kind 1 lands at its `0x7e2` arm, not the stack arm at
+`0x83a`.
+
+(An earlier version of this section said the destination record was empty. That
+was unsound -- the address dumped was a fixed one taken from one call's
+arguments, not necessarily the live record at each breakpoint, and other hits
+on the same address show non-zero contents. Disregard it.)
 
 **Where the `go` gives up, named.** `fn_21_0fcc` reaches its general arm at
 `0x10e2` and calls `fn_21_04a6` -- the destination resolver -- at `0x1102`;
