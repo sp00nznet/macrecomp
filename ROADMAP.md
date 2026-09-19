@@ -342,6 +342,17 @@ there into the caller's record. At the `go` command the top element's length
 reads `0x5c` -- 92 bytes, exactly the record size -- so the parser builds the
 whole destination descriptor on that pool and this pops it off.
 
+**The descriptor parser is `fn_12_12ee`**, the same function whose missing
+epilogue `--entry 0x1322` fixed. It classifies with `jt 0x8f2` and dispatches
+through a PC-relative table at `0x1316`, targets at `0x1314 + entry`:
+
+    type 1 -> 1322   type 2 -> 1332   type 3 -> 139e
+    type 4 -> 140e   type 5 -> 1450   type 6 -> 1460
+
+All six are decoded instruction boundaries with `case` labels in the generated
+switch -- checked, because `0x1322` needing a hand-fed entry made the rest
+suspect. They are fine, so the dispatch is not the fault.
+
 So the empty stack name is written by whatever parses `stack "Whole Earth"`
 into that 92-byte descriptor, and that is where to look next. The pool is
 reused between parses, so it has to be read at the right moment rather than
