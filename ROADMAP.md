@@ -301,11 +301,28 @@ byte `a5-0x49aa` to 1, stores the object into `a5-0x49a4`/`a5-0x49a0`/
 in and runs the interpreter. The interpreter is alive -- `fn_9_41e2` is
 entered 232,048 times in a run with no click at all, and 264,972 with one.
 
+The object is resolved and its script is fetched, too. `fn_9_3f1e` reaches
+`fn_9_1670`, which dispatches on the object-type byte `a5-0x49aa` -- with a
+click it is called six times with types **1, 2, 2, 2, 3, 4**, all in range,
+and type 1 is the button. That arm calls `fn_9_13e6`, which looks the part up
+by id (`jt 0x1da2` = `fn_19_0f1e`, matching the block tag against 'CARD'/'BKGD'
+at seg19+0xfac and walking parts from +0x32), takes `part + 30` as the name,
+and calls `jt 0x1912` (`fn_17_0c22`, "skip one C string") **twice** -- once for
+the name and once for the empty string that follows it, which is how every
+part record on this disc is laid out (`'Whole Earth  on mouseUp...'`).
+`jt 0x1912` goes from 47,178 calls to 51,838 with a click, so that path runs.
+
+And the text is there. Guest memory at the loaded card block (`+0xa0` of the
+608-byte `CARD 5341` block) reads:
+
+    57686f6c 65204561 72746800 006f6e20 6d6f7573 6555700d ...
+    W h o l  e   E a  r t h      o n _  m o u s  e U p 
+
+byte for byte what is on the disc. So the script HyperCard is handed is
+correct.
+
 So everything from the event to "run this handler on this object" is
-measured working, and the fault is in the interpreter's **handler lookup**:
-`on mouseUp` in that button's script is never entered, and an unhandled
-message passes quietly up the chain, which is why nothing at all appears in
-the log after a click.
+measured working
 
 One strong lead for whoever picks this up. That object-type byte at
 `a5-0x49aa` is what `fn_9_1670` dispatches on, with a `subq.w #1 / beq` chain
