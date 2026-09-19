@@ -501,9 +501,26 @@ Two HAL faults were behind it, both general rather than HyperCard-specific:
 
   What is left is the opcode handling in `fn_21_59e2` itself
 - **A script error still fires**, now `Can't understand what's after "pass"`
-  (`DLOG 1684`, `STR# 1002`) plus an `ALRT 3003` "Unexpected error 673082".
-  The catalogue's script uses `pass doMenu` and `pass idle`. The dialog draws
-  over rows 91-168 of the card.
+  (`DLOG 1684`, `STR# 1002`) with an `ALRT 3003` "Unexpected error 673082"
+  behind it. **This is the thing to fix next**, because the catalogue's
+  `on idle` ends with `pass idle`: the error is raised on every idle, so the
+  dialog is re-posted as fast as it is dismissed and will never clear. Home's
+  own script has `pass startUp` and `pass resume`, which is why two parse
+  errors fire before the click as well.
+
+  HyperTalk's vocabulary lives in `WTLK` resources, and `pass` is in `WTLK 4`;
+  all four are loaded correctly at run time (`res 'WTLK' 1..4`), so the word
+  is known -- the failure is in parsing the message name after it.
+
+  Worth noting for that hunt: `find_entries.py` only sees **word**-indexed
+  `4EFB` tables. The WOBA row decoder uses a **byte**-indexed one --
+  `move.b <tbl>(pc,Dn.w),Dm` then `jmp <tbl>(pc,Dm.w)`, targets `tbl + byte`.
+  Scanning for those by treating every `4EFB` table as bytes reports 1,718
+  "missing" targets, nearly all noise, because a word table's halves are not
+  offsets. Finding them properly means matching the `move.b` that precedes the
+  jump and sharing its base; that is not done, and it is a real gap in the
+  tool given how much damage one missed arm did.
+
 - **A chunk expression loses two characters.** The catalogue's script builds a
   path from `the long name of this stack`; with the volume renamed `ABCDEFGH`
   the request comes out `CDEFGH:`, i.e. `char 1 to i` returning `char 3 to i`.
