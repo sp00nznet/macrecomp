@@ -287,12 +287,37 @@ And then nothing. No file is opened, no Standard File, no error dialog, no
 end mouseUp`, and the handler is never entered. An unhandled message passing
 quietly up the chain and off the end is exactly what this looks like.
 
-So the remaining fault is in HyperTalk's **handler lookup for an object's
-script** -- not in the event path, the window routing, the hit-test, the part
-walk, or the message send, all of which are now measured working. Two facts
-to start from: the parser does run (the state byte at `a5-0x49aa` cycles
-through 2,3,4,5 during a run), and the script text is present in the `CARD`
-block, stored inline in the part record after the name.
+The message is dispatched correctly, too. `fn_1_0320` calls `jt 0xb82` =
+`fn_9_3fd0`, which returns immediately if the object's part id (its `$10(a6)`)
+is zero -- and with a click it is **not** zero. Diffing the arguments between
+a run with a click and one without isolates the new call exactly:
+
+    args: 000008ea 000014dd 00540000 14dd0002
+           bkgd 2282  card 5341  part 0x54 = 84
+
+84 is the Whole Earth button. So `fn_9_3fd0` proceeds: it sets the object-type
+byte `a5-0x49aa` to 1, stores the object into `a5-0x49a4`/`a5-0x49a0`/
+`a5-0x499a`/`a5-0x499c`, and calls `fn_9_3f1e`, which swaps the object block
+in and runs the interpreter. The interpreter is alive -- `fn_9_41e2` is
+entered 232,048 times in a run with no click at all, and 264,972 with one.
+
+So everything from the event to "run this handler on this object" is
+measured working, and the fault is in the interpreter's **handler lookup**:
+`on mouseUp` in that button's script is never entered, and an unhandled
+message passes quietly up the chain, which is why nothing at all appears in
+the log after a click.
+
+One strong lead for whoever picks this up. That object-type byte at
+`a5-0x49aa` is what `fn_9_1670` dispatches on, with a `subq.w #1 / beq` chain
+that handles **only 1 to 4** before falling through to `move.l #$421bebe` and
+HyperCard's own assertion. The raw bytes confirm the decode is right -- four
+cases, then `bra`. Values 1-4 are presumably button, field, card, background;
+**5 would be the stack**, and in the catalogue-as-Home build the byte does
+reach 5 (and then 0), which is exactly where that build raises
+*"Unexpected error 69320382"* and quits -- after `hide menuBar` from the
+catalogue's `on openStack` has already run. So a message sent to the *stack*
+object is the case this recomp gets wrong, and it is likely the same defect
+behind both symptoms
 
 Note the earlier note in this file that said the hit-test "answers nothing"
 was wrong: the not-found dispatches it was counting (`fn_1_2548`) happen six
