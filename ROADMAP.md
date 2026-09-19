@@ -285,6 +285,18 @@ HyperCard carries on idling quite happily (1.2 million traps after the click),
 so it has not crashed or hung; the `go` simply resolves to nothing and gives
 up without asking the file system anything.
 
+**Where the `go` gives up, named.** `fn_21_0fcc` reaches its general arm at
+`0x10e2` and calls `fn_21_04a6` -- the destination resolver -- at `0x1102`;
+a false answer there branches to `0x1268` and the `go` ends quietly, which is
+exactly what is observed. Inside `fn_21_04a6` the destination kind byte
+(`-$5c(a6)`, copied from the record) dispatches at `0x07a2`: 0, 1, **2**, 3, 4
+to `0x7c4`, `0x7e2`, `0x83a`, `0x936`, `0x9ee`. Kind 2 is the stack arm, and
+`0x077c` is what sets the kind to 2. The stack arm opens with
+`move.b d4,d0; bne.w $a88` -- d4 being the inverse of `fn_21_3978`, which
+compares the destination name against `a5-0x9fe` and answers "is this the
+stack we are already in". So the chain to read next is
+`fn_21_04a6 + 0x83a` onwards, with `MRBRK=6504a6`.
+
 **The same symptom appears on the other route in.** Driving *File > Open
 Stack...* through the menu gets as far as Standard File, which `MRDOC` answers
 with a well-formed `SFReply` -- `good`=1, type `STAK`, name `Whole Earth` --
