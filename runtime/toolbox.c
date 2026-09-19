@@ -88,9 +88,17 @@ static void port_regions(uint32_t p, const Rect *r){
 static uint32_t g_wins[MAX_WINS]; static int g_nwins;
 static int g_win_pending[MAX_WINS];
 static int g_win_activate[MAX_WINS];   /* owes an activateEvt */
+/* Where each window actually sits on screen. NewWindow is handed global
+ * bounds and this HAL used to keep only the local portRect, so nothing knew
+ * one window from another by position -- and FindWindow, having nothing to go
+ * on, named the most recently created window for every click. HyperCard makes
+ * five (the card plus its palettes), so every click was attributed to a
+ * palette and the card never saw one. */
+static Rect g_win_bounds[MAX_WINS];
 static int win_index(uint32_t w){
     for(int i=0;i<g_nwins;i++) if(g_wins[i]==w) return i;
-    if(g_nwins < MAX_WINS){ g_wins[g_nwins]=w; g_win_pending[g_nwins]=0; return g_nwins++; }
+    if(g_nwins < MAX_WINS){ g_wins[g_nwins]=w; g_win_pending[g_nwins]=0;
+        rect_set(&g_win_bounds[g_nwins],0,0,QD_H,QD_W); return g_nwins++; }
     return -1;
 }
 /* Record the clip in the current port so SetPort can restore it. */
@@ -770,6 +778,10 @@ void m68k_trap(uint16_t raw){
         m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, visible?1:0); m68k_w8(w+111, 1);
         port_regions(w, &pr);
         win_dirty(w, 1);
+        { int i = win_index(w); if(i>=0) g_win_bounds[i] = br;
+          if(getenv("MRTRACE")) fprintf(stderr,
+              "  [win] NewWindow %06x bounds %d,%d,%d,%d vis=%d\n",
+              w, br.top, br.left, br.bottom, br.right, visible); }
         g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);                    /* Pascal result slot */
     } break;
@@ -826,9 +838,24 @@ void m68k_trap(uint16_t raw){
      * answering inDesk for everything, as an unimplemented trap effectively
      * does, drops every click and nothing can be navigated. */
     case 0xA92C: /*FindWindow*/ { uint32_t wp=pop32(), pt=pop32(); int h,v;
-        pt_unpack(pt,&h,&v); (void)h;
-        int part = v<20 ? 1/*inMenuBar*/ : g_front_win ? 3/*inContent*/ : 0/*inDesk*/;
-        if(wp) m68k_w32(wp, part==3 ? g_front_win : 0);
+        pt_unpack(pt,&h,&v);
+        /* Answer with the window the point is actually in, topmost first --
+         * most recently created wins ties, which is the only ordering this HAL
+         * keeps. Naming the front window for every click sends every one of
+         * them to whichever window was made last; with HyperCard that is a
+         * palette, and the card never sees a click at all. */
+        uint32_t hit = 0;
+        for(int i = g_nwins - 1; i >= 0 && !hit; i--){
+            uint32_t cw = g_wins[i];
+            if(!cw || !m68k_r8(cw + 110)) continue;      /* not visible */
+            if(pt_in_rect(h, v, &g_win_bounds[i])) hit = cw;
+        }
+        if(!hit) hit = g_front_win;                      /* full-screen fallback */
+        int part = v<20 ? 1/*inMenuBar*/ : hit ? 3/*inContent*/ : 0/*inDesk*/;
+        if(wp) m68k_w32(wp, part==3 ? hit : 0);
+        if(part==3 && getenv("MRHIT"))
+            fprintf(stderr, "  [win] %d,%d -> window %06x (front %06x)\n",
+                    h, v, hit, g_front_win);
         ret16((uint16_t)part); } break;
     case 0xA851: /*SetCursor*/ (void)pop32(); break;   /* nothing draws a cursor */
     case 0xA976: /*GetKeys*/ { uint32_t km=pop32();    /* no modifier is held */

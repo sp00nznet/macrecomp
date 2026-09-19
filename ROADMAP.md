@@ -263,12 +263,47 @@ landing in Standard File, which `MRDOC` answers with a well-formed `SFReply`:
 `good`=1, type `STAK`, vRefNum -1 (which is what this File Manager reports),
 name `WHOLE EARTH`.
 
-**Where it stops now.** HyperCard reads that reply, resolves the volume with
-`PBGetCatInfo` (selector 9, answered: root, dirID 2, 279 files) -- and then
-never opens the file. No `Open`, no `GetFileInfo`, no second `StandardFile`,
-and no error dialog; it returns to idling. The reply is not the problem, so the
-next thread is inside HyperCard's own open-stack path, after the point where
-the HAL has told it everything it asked.
+**Where it stops now: HyperCard has no current card.**
+
+The click is not being lost in the HAL. Traced trap by trap, it goes all the
+way in: `IsDialogEvent` (false, no dialog exists), `FindWindow` -> inContent
+and the *card* window, `SetPort`, `GlobalToLocal`, then HyperCard's own event
+dispatcher `fn_1_1d52` takes the mouseDown arm at `0x1e78`, resolves the part
+code to inContent at `0x2010`, matches the window against `a5-0x1234` -- its
+card window -- and calls `fn_1_1cb0`. Both gates there pass (`a5-0x100f` = 1,
+`a5-0x1020` = 1), so it calls `jt 0x1722` = `fn_16_4fd6`, the card-click
+handler.
+
+`fn_16_4fd6` begins:
+
+    4fde  tst.l  -$2396(a5)      ; the current card
+    4fe2  seq.b  d0
+    4fe4  or.b   -$b2f(a5), d0
+    4fe8  andi.w #$1, d0
+    4fec  beq.b  $4ff2           ; have a card -> handle the click
+    4fee  bra.w  $50da           ; else -> drop it
+
+**`a5-0x2396` is null.** It is written exactly twice in a run, both zero, both
+during start-up in `CODE 3` -- and never again. Every routine that sets it
+(`fn_16_2416` = `jt 0x161a`, `fn_21_56f6` = `jt 0x225a`, `fn_3_215a`) is never
+called. So HyperCard opens the stack, reads its blocks, makes its five windows
+and idles, but never establishes a current card object, and every click on the
+card is discarded on that first test.
+
+This is *not* specific to which stack is open: the catalogue-as-Home build,
+the one whose card art did reach the screen, leaves `a5-0x2396` null too. The
+card gets painted through the update path (`fn_21_633a` -> the WOBA expander),
+which does not need the card object; clicking does.
+
+So the thread is: what should call `jt 0x225a` (go to card), and why does
+nothing? Reproduce with `MRJT=225a` (never fires) and
+`MRWATCHADDR=<a5-0x2396>`, a5 being 0x400000.
+
+Knobs added along the way: `MRJT=<hex a5off>` resolves a jump-table call to its
+target, `MRHOLD` sets how long a synthetic press is held, and `FindWindow` now
+answers with the window the point is actually in -- `NewWindow` was given
+global bounds and kept only a local portRect, so every click was attributed to
+whichever window was created last (with HyperCard, a palette).
 
 ### What "on screen and navigable" still needs
 

@@ -91,6 +91,15 @@ void m68k_jt_set(uint32_t a5off, uint32_t addr) {
 }
 void m68k_jt_call(uint32_t a5off) {
     uint32_t addr = jt_ok(a5off) ? jt_map[a5off / 2] : 0;
+    /* MRJT=<hex a5 offset>: report what a jump-table call resolves to. Reading
+     * a trace of "jsr $1722(a5)" otherwise means resolving the table by hand. */
+    {   static uint32_t want = 0xFFFFFFFFu;
+        if (want == 0xFFFFFFFFu) { const char *e = getenv("MRJT");
+                                   want = e ? (uint32_t)strtoul(e,0,16) : 0; }
+        if (want && a5off == want) {
+            static int said = 0;
+            if (said++ < 3) fprintf(stderr, "[jt] A5+%x -> %06x (from %06x)\n",
+                                    a5off, addr, g_last_call); } }
     if (addr) m68k_call(addr);
     else fprintf(stderr, "m68k_jt_call: unmapped A5+%x\n", a5off);
 }

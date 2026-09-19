@@ -165,7 +165,12 @@ uint32_t plat_ticks(void){ return (SDL_GetTicks()-start_ms)*60u/1000u; }
  * also polled by the modal-dialog loop long before the title reaches its own
  * event loop, so a count kept here fires the click into the wrong consumer. */
 void plat_inject_click(int x, int y){
-    syn_x = x; syn_y = y; syn_live = 1; syn_down = 30;
+    syn_x = x; syn_y = y; syn_live = 1;
+    /* How long the press is held, counted in guest observations of the mouse.
+     * Too short and a title that has not reached its tracking loop yet sees
+     * the button already up; MRHOLD tunes it. */
+    {   const char *e = getenv("MRHOLD"); syn_down = e ? atoi(e) : 30;
+        if(syn_down < 1) syn_down = 1; }
     evpush(1/*mouseDown*/, 0, x, y);
     fprintf(stderr, "[click] %d,%d\n", x, y);
 }
