@@ -319,3 +319,26 @@ lifter and HAL from overfitting to one binary.
   only warns when it detects it is reading encrypted bytes.
 - The manager table in `scan_traps.py` is hand-maintained. It places every trap
   the two scanned titles use; new titles may add unclassified names.
+
+## Where HyperCard 1.2.2 stops
+
+The HyperTalk parse error is fixed; HyperCard runs clean on the unmodified Home
+stack, executes scripts, draws to the screen through the message box, and
+navigates between cards. What it does not do is paint a card.
+
+The render chain is traced end to end and every link is confirmed to run by
+breakpoint count: the update handler, the paint dispatch, the renderer
+(`fn_16_402e`, 6878x), the WOBA bitmap expander (`fn_21_59e2`, which fills
+0x843da0), the composite (`fn_16_05c0`, 6850x) and the card-to-screen blit
+(`fn_16_06fe`, 6886x).
+
+The composite exits on its first instruction. It intersects the card rect
+against the dirty rect at `a5-0x1d0a`, and that rect is (0,0,0,0), so the blit
+source at `a5-0x1318` is never filled and the blit copies emptiness.
+
+The dirty rect is filled only by the mode-1 full-redraw path, which needs the
+word at `a5-0x1022` to be 1; it reads 0. The routines that would set it all live
+in **CODE 13, which never executes** -- along with segments 2, 4-8, 10-12, 15
+and 18. That is not a loader fault: the jump table is fully populated for all 21
+segments and nothing reports an unmapped entry. The open question is what
+normally drives HyperCard into those paths.
