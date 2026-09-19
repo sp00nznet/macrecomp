@@ -329,11 +329,18 @@ bitmap decoder stops after roughly 105 of 342 rows, although the composite and
 the expander are both handed the full card rect (0,0,342,512) and the block
 carries 14296 bytes of image data.
 
-Clicks reach the card. `MRCLICK=x,y[,n]` synthesises one, and a click on the
-first Table of Contents button (rect t=81 l=2 b=112 r=185) makes HyperCard
-search its stacks -- twenty names, NOMADICS through QUICK SEARCH -- so the
-button's script runs. It does not arrive: the catalog's own script fails to
-parse with `Can't understand what's after "if"`. That one is traced.
+`MRCLICK=x,y[,n]` synthesises a click, and the first Table of Contents button
+is at rect t=81 l=2 b=112 r=185 (read out of the stack file). **No effect of
+that click has been demonstrated.** An earlier note here claimed the click made
+HyperCard search its stacks; it did not. That enumeration -- twenty names,
+NOMADICS through QUICK SEARCH -- happens at startup while HyperCard looks for
+its Home stack, and the count is identical with and without a click. Nor does
+the click reliably produce the `Can't understand what's after "if"` error: that
+appears intermittently in both cases, because `TickCount` is wired to real time
+and no two runs reach the same point. Anything measured across runs here needs
+repeating before it means anything.
+
+The `if` error itself is traced.
 `fn_14_298e` raises it at `seg14+0x2b20`, where it loads the handle at
 `a5-0x551e`, dereferences it, and requires the first word of the block to be
 non-zero. The handle is set -- by `fn_3_0e3a` -- and points at a block whose
