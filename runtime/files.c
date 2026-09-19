@@ -242,6 +242,7 @@ static int do_getfileinfo(uint32_t pb){
 #define VREFNUM   (-1)
 #define ROOT_DIR    2
 #define PB_IODIRID   48     /* ioDirID / ioFlNum share this slot */
+#define PB_IOWDVREFNUM 30   /* WDPBRec only; distinct from ioVRefNum at 22 */
 #define PB_IODRNMFLS 52     /* files in a directory (ioDrNmFls) */
 #define PB_IOPARID  100     /* ioDrParID / ioFlParID: the enclosing directory */
 #define ROOT_PARENT   1     /* the root's parent, by HFS convention */
@@ -411,9 +412,16 @@ int fs_dispatch(uint16_t w){
     case 0x0007: /*PBGetWDInfo*/
     case 0x0001: /*PBOpenWD*/
         /* Working directories collapse onto the one real directory: the volume
-         * reference and the root are the only answer there is. */
+         * reference and the root are the only answer there is.
+         *
+         * PBGetWDInfo answers in WDPBRec's own fields, not the ones a plain
+         * ParamBlockRec uses: ioWDProcID(26), ioWDVRefNum(30) and
+         * ioWDDirID(48). Setting only ioVRefNum leaves a caller that asked
+         * "which volume is this working directory on?" reading zero. */
         m68k_w16(pb + PB_IOVREFNUM, (uint16_t)VREFNUM);
+        m68k_w16(pb + PB_IOWDVREFNUM, (uint16_t)VREFNUM);
         m68k_w32(pb + PB_IODIRID, ROOT_DIR);
+        if(m68k_r32(pb + PB_IONAMEPTR)) put_pstr(m68k_r32(pb + PB_IONAMEPTR), "Untitled");
         fail(pb, NOERR); return 1;
     case 0x0002: /*PBCloseWD*/
         fail(pb, NOERR); return 1;
