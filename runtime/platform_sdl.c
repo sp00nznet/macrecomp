@@ -48,11 +48,17 @@ static void shot(void){
     {   int any=0;
         for(int y=0;y<QD_H&&!any;y++) for(int x=0;x<QD_W;x++) if(qd_fb[y][x]){ any=1; break; }
         if(!any) return; }
-    FILE *f = fopen(path, "wb");
+    /* Write then rename: this runs on every present, so a run killed by a
+     * timeout would otherwise leave a half-written file exactly when the
+     * picture is wanted. */
+    char tmp[300];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
     if(!f) return;
     fprintf(f, "P5\n%d %d\n255\n", QD_W, QD_H);
     for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) fputc(qd_fb[y][x] ? 0 : 255, f);
     fclose(f);
+    remove(path); rename(tmp, path);
 }
 
 /* MRBMSHOT=<hexbase>:<rowbytes>:<height>:<path> writes a 1-bit bitmap out of

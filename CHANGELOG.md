@@ -72,6 +72,11 @@ All notable changes to this project are documented here. Format follows
   `SelectWindow`, `InvalRect`, `InvalRgn` and a new window now queue one, and it
   is delivered once per exposure -- cleared on delivery rather than on
   `BeginUpdate`, so a title that never calls `BeginUpdate` cannot spin on it.
+- **The clip rect was global rather than per-port.** A clip narrowed for one
+  offscreen port stayed in force for every port used after it. HyperCard
+  measures its font in a port clipped to the top 64 rows, so everything drawn
+  below that line afterwards was silently discarded. `SetPort` now restores the
+  port's own `clipRgn`, and `ClipRect`/`SetClip` record into it.
 - **The handle-size table was a fixed 4096 entries and silently overflowed.**
   Past that, every new handle reported size 0: `SetHandleSize` took its
   "unknown" path, `HandToHand` and `HandAndHand` copied nothing, and

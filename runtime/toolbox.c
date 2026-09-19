@@ -54,6 +54,7 @@ static Rect rd_rect(uint32_t p);
 static void rgn_put(uint32_t h, const Rect *r);
 static Rect rgn_get(uint32_t h);
 static int rect_empty(const Rect *r);
+static uint32_t g_cur_port;
 /* An update event is only half the story: having been told to repaint, a Mac
  * application asks EmptyRgn(theWindow->updateRgn) whether there is anything to
  * repaint, and a window with no update region at all answers "no" and draws
@@ -81,6 +82,13 @@ static int win_index(uint32_t w){
     if(g_nwins < MAX_WINS){ g_wins[g_nwins]=w; g_win_pending[g_nwins]=0; return g_nwins++; }
     return -1;
 }
+/* Record the clip in the current port so SetPort can restore it. */
+static void port_set_clip(const Rect *r){
+    if(!g_cur_port) return;
+    uint32_t rgn = m68k_r32(g_cur_port + 28);
+    if(!rgn){ rgn = rgn_alloc(); if(!rgn) return; m68k_w32(g_cur_port + 28, rgn); }
+    rgn_put(rgn, r);
+}
 static void win_dirty(uint32_t w, int dirty){
     if(!w) return;
     uint32_t rgn = m68k_r32(w + WR_UPDATERGN);
@@ -89,7 +97,7 @@ static void win_dirty(uint32_t w, int dirty){
     if(dirty){ Rect r = rd_rect(w + 16); rgn_put(rgn, &r); if(i>=0) g_win_pending[i]=1; }
     else { Rect z = {0,0,0,0}; rgn_put(rgn, &z); if(i>=0) g_win_pending[i]=0; }
 }
-static uint32_t g_cur_port = 0;             /* current GrafPort (for GetPort) */
+/* declared above, next to the port helpers */
 /* BitMap layout: baseAddr(4), rowBytes(2), bounds Rect(8: top,left,bottom,right) */
 static void bitmap_screen(uint32_t bm){ m68k_w32(bm,screen_base()); m68k_w16(bm+4,QD_W/8);
     Rect s={0,0,QD_H,QD_W}; wr_rect(bm+6,&s); }
@@ -534,7 +542,16 @@ void m68k_trap(uint16_t raw){
     case 0xA9F4: /*ExitToShell*/ fprintf(stderr,"[ExitToShell]\n"); plat_present(); exit(0);
 
     /* ---- QuickDraw: pen & text state ---- */
-    case 0xA873: /*SetPort*/ { uint32_t p=pop32(); g_cur_port=p; if(p) set_target_from_bitmap(p+2); } break;
+    case 0xA873: /*SetPort*/ { uint32_t p=pop32(); g_cur_port=p;
+        if(p){ set_target_from_bitmap(p+2);
+            /* The clip belongs to the port, not to QuickDraw as a whole. It was
+             * global here, so a clip narrowed for one offscreen port stayed in
+             * force for every port after it -- HyperCard measures its font in a
+             * port clipped to the top 64 rows, and everything drawn afterwards
+             * below that line was silently discarded. */
+            Rect c = rgn_get(m68k_r32(p + 28));
+            if(rect_empty(&c)) c = rd_rect(p + 16);
+            qd_set_clip(&c); } } break;
     case 0xA874: /*GetPort*/ { uint32_t pp=pop32(); if(pp) m68k_w32(pp,g_cur_port); } break;
     case 0xA89E: /*PenNormal*/ qd_pen_size(1,1); qd_pen_mode(0); qd_pen_pat_black(1); break;
     case 0xA89B: /*PenSize*/ { int16_t h=pop16(),ww=pop16(); qd_pen_size(ww,h); } break;
@@ -574,7 +591,7 @@ void m68k_trap(uint16_t raw){
     case 0xA8B8: /*EraseOval*/ { Rect r=rd_rect(pop32()); qd_fill_oval(&r,0); } break;
     case 0xA8B9: /*InvertOval*/ { Rect r=rd_rect(pop32()); qd_fill_oval(&r,1); } break;
     case 0xA8BB: /*FillOval*/  { (void)pop32(); Rect r=rd_rect(pop32()); qd_fill_oval(&r,1); } break;
-    case 0xA87B: /*ClipRect*/  { Rect r=rd_rect(pop32()); qd_set_clip(&r);
+    case 0xA87B: /*ClipRect*/  { Rect r=rd_rect(pop32()); qd_set_clip(&r); port_set_clip(&r);
         if(getenv("MRGFX")) fprintf(stderr,"[gfx] ClipRect %d,%d,%d,%d\n",r.top,r.left,r.bottom,r.right); } break;
     case 0xA884: /*DrawString*/{ uint32_t s=pop32(); int len=m68k_r8(s); uint8_t buf[256];
         for(int i=0;i<len;i++) buf[i]=(uint8_t)m68k_r8(s+1+i); qd_draw_text(buf,len); } break;
@@ -1118,7 +1135,7 @@ void m68k_trap(uint16_t raw){
     case 0xA8D4: /*EraseRgn*/ { Rect r=rgn_get(pop32()); qd_erase_rect(&r); } break;
     case 0xA8D5: /*InverRgn*/ { Rect r=rgn_get(pop32()); qd_invert_rect(&r); } break;
     case 0xA8D6: /*FillRgn*/ { (void)pop32(); Rect r=rgn_get(pop32()); qd_fill_rect(&r,1); } break;
-    case 0xA879: /*SetClip*/ { Rect r=rgn_get(pop32()); qd_set_clip(&r);
+    case 0xA879: /*SetClip*/ { Rect r=rgn_get(pop32()); qd_set_clip(&r); port_set_clip(&r);
         if(getenv("MRGFX")) fprintf(stderr,"[gfx] SetClip %d,%d,%d,%d\n",r.top,r.left,r.bottom,r.right); } break;
     case 0xA87A: /*GetClip*/ { uint32_t h=pop32(); Rect r; qd_get_clip(&r); rgn_put(h,&r); } break;
     case 0xA8DA: /*OpenRgn*/ break;   /* region recording: the clip stands in */
