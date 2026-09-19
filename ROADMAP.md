@@ -371,6 +371,33 @@ compares the destination name against `a5-0x9fe` and answers "is this the
 stack we are already in". So the chain to read next is
 `fn_21_04a6 + 0x83a` onwards, with `MRBRK=6504a6`.
 
+**The name does reach HyperCard's interning code.** The descriptor's name is
+not stored as text but as a *reference*: field 88 of the 92-byte record
+(`-$4(a6)` in both `fn_12_11c2` and `fn_21_04a6`, which is inside the copied
+record). `fn_21_04a6` turns it back into text with `jt 0x1fba` before
+`fn_21_3978` looks at it.
+
+Two differential measurements, with a click against without:
+
+- **`jt 0x1fb2` = `fn_20_2264` is called with the right name.** Its argument
+  points at `Whole Earth` -- `003ef756 ... 0b57686f 6c652045 61727468`,
+  and the breakpoint's own text probe prints `".Whole Earth..."`. So the
+  string literal survives the parse intact.
+- **`jt 0x1fba` is called with a null reference** on both click-only calls
+  (`args[0] = 00000000`), which is why the name it produces is empty and
+  `fn_21_3978` says "same stack".
+
+`fn_20_2264` compares the name against `Home` at `seg20+0x233c`, builds a
+path if it differs, then interns two strings into tables at `a5-0xb14` and
+`a5-0xb18` -- looking up with `jt 0x1ab2`, inserting with `jt 0x1972` when
+absent -- and returns `(d7 << 16) | d6`, the two table indices packed. Both
+tables are live: the insert runs 52 times without a click and 56 with one.
+
+What is **not** yet established is whether `fn_20_2264` itself returns zero.
+The null seen at `jt 0x1fba` proves some descriptor's reference field is zero;
+it does not by itself prove it is the one this call built. That wants reading
+the return, not inferring it -- the mistake this file records twice already.
+
 **Both routes fail in the same place, and it is one defect.** The only three
 call sites of the Open glue (`jt 0x2a2` = `fn_1_4798`) are in `fn_21_1bec`
 (twice) and `fn_21_1e1e` (once). Measured:
