@@ -72,6 +72,9 @@ All notable changes to this project are documented here. Format follows
   `SelectWindow`, `InvalRect`, `InvalRgn` and a new window now queue one, and it
   is delivered once per exposure -- cleared on delivery rather than on
   `BeginUpdate`, so a title that never calls `BeginUpdate` cannot spin on it.
+- **`ValidRect` and `ValidRgn` validated nothing.** Removing area from the
+  update region is the whole point of them; as no-ops they left the window
+  permanently dirty, which matters as soon as the update region is real.
 - **Windows had no `updateRgn`.** An update event is only half the story: told
   to repaint, a Mac application asks `EmptyRgn(theWindow->updateRgn)` whether
   there is anything to repaint, and a window with no update region at all

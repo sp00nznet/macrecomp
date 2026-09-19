@@ -28,6 +28,7 @@ typedef struct { int16_t v, h; } Point;
 extern uint8_t qd_fb[QD_H][QD_W];       /* 1 byte/pixel, 0=white 1=black (simple) */
 void qd_init(void);
 void qd_pen_to(int h, int v);
+void qd_get_pen(int *h, int *v);
 void qd_line_to(int h, int v);
 void qd_line(int dh, int dv);
 void qd_pen_size(int w, int h);

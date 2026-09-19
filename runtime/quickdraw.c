@@ -67,6 +67,7 @@ void qd_pen_size(int w, int h){ pen_w=w>0?w:1; pen_h_sz=h>0?h:1; }
 void qd_pen_mode(int mode){ pen_mode=mode; }
 void qd_pen_pat_black(int black){ pen_black=black?1:0; }
 void qd_pen_to(int h, int v){ pen_h=h; pen_v=v; }
+void qd_get_pen(int *h, int *v){ if(h)*h=pen_h; if(v)*v=pen_v; }
 
 static void hspan(int x0, int x1, int y, int black){
     if (x0>x1){ int t=x0;x0=x1;x1=t; } for(int x=x0;x<=x1;x++) put(x,y,black);

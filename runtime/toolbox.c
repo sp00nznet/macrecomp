@@ -540,7 +540,10 @@ void m68k_trap(uint16_t raw){
         if(getenv("MRGFX")) fprintf(stderr,"[gfx] ClipRect %d,%d,%d,%d\n",r.top,r.left,r.bottom,r.right); } break;
     case 0xA884: /*DrawString*/{ uint32_t s=pop32(); int len=m68k_r8(s); uint8_t buf[256];
         for(int i=0;i<len;i++) buf[i]=(uint8_t)m68k_r8(s+1+i); qd_draw_text(buf,len); } break;
-    case 0xA883: /*DrawChar*/  { qd_draw_char(pop16()); } break;
+    case 0xA883: /*DrawChar*/  { int c=pop16();
+        if(getenv("MRGFX")){ int ph,pv; qd_get_pen(&ph,&pv);
+            fprintf(stderr,"[gfx] DrawChar '%c' at %d,%d\n", (c>=32&&c<127)?c:46, ph, pv); }
+        qd_draw_char(c); } break;
 
     /* ---- events (thin) ---- */
     case 0xA975: /*TickCount*/ ret32(plat_ticks()); break;
@@ -639,8 +642,12 @@ void m68k_trap(uint16_t raw){
     } break;
     case 0xA910: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
     case 0xA914: /*DisposeWindow*/ { uint32_t w=pop32(); if(w==g_front_win) g_front_win=0; } break;
-    case 0xA916: /*HideWindow*/
-    case 0xA92A: /*ValidRect*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
+    case 0xA916: /*HideWindow*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
+    /* ValidRect/ValidRgn remove area from the update region -- that is the
+     * whole point of them. A no-op leaves the window permanently dirty, and an
+     * application that validates and then re-checks spins for ever. */
+    case 0xA92A: /*ValidRect*/ case 0xA929: /*ValidRgn*/
+        (void)pop32(); win_dirty(g_front_win, 0); break;
     /* Anything that exposes window content owes the app an update event; there
      * is no real window server here to raise one. */
     /* Showing or selecting a window says which one is front far more reliably
