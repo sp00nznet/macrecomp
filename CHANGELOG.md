@@ -8,6 +8,19 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **The Window Manager's low-level half was missing, and leaking arguments.**
+  `CalcVis`, `CalcVBehind`, `ClipAbove`, `PaintOne`, `PaintBehind`, `SaveOld`
+  and `DrawNew` ($A909-$A90F) all fell through to the unimplemented-trap log,
+  which does not pop arguments -- so every call left four or eight bytes of
+  rubbish on the guest stack. HyperCard calls them when a new stack's window
+  appears, which is exactly when a recomp can least afford a corrupted stack.
+
+  They need no real region arithmetic here (one framebuffer, one visible
+  window) but they do have to take their arguments off; `DrawNew` also marks
+  the window for update. With them in place HyperCard reads **19 blocks** of
+  the catalogue instead of 13, including a 7,456-byte one, and **the
+  catalogue's card artwork reaches the screen**.
+
 - **OS traps were not setting the condition codes.** The register-based half
   of the trap table returns its result in `D0` *and leaves the flags set from
   it*; compiled code branches on that directly. HyperCard's string-table

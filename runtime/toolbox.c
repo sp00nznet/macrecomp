@@ -823,6 +823,22 @@ void m68k_trap(uint16_t raw){
     case 0xA910: /*GetWMgrPort*/ { uint32_t pp=pop32(); if(pp)m68k_w32(pp,0); } break;
     case 0xA914: /*DisposeWindow*/ { uint32_t w=pop32(); if(w==g_front_win) g_front_win=0; } break;
     case 0xA916: /*HideWindow*/ case 0xA904: /*DrawGrowIcon*/ (void)pop32(); break;
+    /* The Window Manager's low-level half. HyperCard calls these when a new
+     * stack's window appears, and every one of them was falling through to the
+     * unimplemented-trap log -- which does not pop arguments, so each call left
+     * four or eight bytes of rubbish on the guest stack. They do not need real
+     * region arithmetic here (one framebuffer, one visible window), but they do
+     * have to take their arguments off.
+     *   CalcVis(w)                PaintOne(w, clobberedRgn)
+     *   CalcVBehind(w, rgn)       PaintBehind(w, clobberedRgn)
+     *   ClipAbove(w)              SaveOld(w)
+     *   DrawNew(w, update: Boolean) */
+    case 0xA909: /*CalcVis*/    case 0xA90B: /*ClipAbove*/
+    case 0xA90E: /*SaveOld*/    (void)pop32(); break;
+    case 0xA90A: /*CalcVBehind*/ case 0xA90C: /*PaintOne*/
+    case 0xA90D: /*PaintBehind*/ (void)pop32(); (void)pop32(); break;
+    case 0xA90F: /*DrawNew*/    { (void)pop16(); uint32_t w=pop32();
+        if(w) win_dirty(w, 1); g_update_pending = 1; } break;
     /* ValidRect/ValidRgn remove area from the update region -- that is the
      * whole point of them. A no-op leaves the window permanently dirty, and an
      * application that validates and then re-checks spins for ever. */

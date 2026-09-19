@@ -128,6 +128,17 @@ static int do_open(uint32_t pb, int rsrc){
                         rsrc ? "RF" : "", pb, M.a[5], name, (int16_t)m68k_r16(pb + PB_IOVREFNUM),
                         (int)m68k_r8(pb + PB_IOPERMSSN),
                         idx < 0 ? "fnfErr" : g_file[idx].name);
+    /* MRFILE: on a miss, show the bytes around ioNamePtr. A name that is right
+     * but starts a couple of bytes off looks identical in the log otherwise. */
+    if(idx < 0 && trace()){
+        uint32_t np = m68k_r32(pb + PB_IONAMEPTR);
+        fprintf(stderr, "        namePtr=%06x:", np);
+        for(int k = -4; k < 14; k++)
+            fprintf(stderr, "%s%02x", k==0?" [":" ", m68k_r8(np + k));
+        fprintf(stderr, "   \"");
+        for(int k = -4; k < 14; k++){ int c = m68k_r8(np + k);
+            fputc((c>=32 && c<127) ? c : '.', stderr); }
+        fprintf(stderr, "\"\n"); }
     if(idx < 0){ fail(pb, FNFERR); return FNFERR; }
     for(int i = 0; i < MAXOPEN; i++){
         if(g_open[i].used) continue;
