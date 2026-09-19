@@ -273,6 +273,16 @@ void m68k_call(uint32_t addr) {
                 }
                 while (*g == ',' || *g == ' ') g++; }
             fprintf(stderr, "\n"); } }
+        /* MRBRKMEM=<hex addr>:<n longs>: dump guest memory at the breakpoint.
+         * An argument is often a pointer to a record, and the record is what
+         * you actually need to see. */
+        { const char *m = getenv("MRBRKMEM");
+          if (m) { unsigned base=0, n=0;
+            if (sscanf(m, "%x:%u", &base, &n) == 2 && n && n <= 32) {
+                fprintf(stderr, "[brk %06x] mem %06x:", addr, base);
+                for (unsigned i = 0; i < n; i++)
+                    fprintf(stderr, " %08x", m68k_r32(base + 4u*i));
+                fprintf(stderr, "\n"); } } }
         fprintf(stderr, "[brk %06x] args:", addr);
         for (int i = 0; i < 8; i++) fprintf(stderr, " %08x", m68k_r32(SP + 4u*i));
         fprintf(stderr, "\n");
