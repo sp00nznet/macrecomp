@@ -299,15 +299,24 @@ destination with `jt 0x8f2`, and dispatches:
 | 4 | `0x1232` | `jt 0x1452` over the whole record |
 | else | `0x1242` | straight to the navigator with the record as-is |
 
-**A click takes arm 1**: `jt 0x146a` goes from 1 call to 2. So the command
-runs, classifies, and fetches a name. `fn_21_04a6` then dispatches on the
-record's kind byte, and kind 1 lands at its `0x7e2` arm, not the stack arm at
-`0x83a`.
+**Which arm a click takes is not settled.** `jt 0x146a` (arm 1's call) goes
+from 1 to 2 with a click, which suggested arm 1 -- but the classifier
+`jt 0x8f2` is `fn_9_01a4`, and all it does is return
+`(a5-0x4704)[(a5-0x4684) - 1]`: a byte out of a type array indexed by a parse
+position. Dumped at the command's entry (`MRBRK=5c11be MRBRKA5=-18052
+MRBRKMEM=3FB8FC:4`) the index reads 1 and the array reads `04 03 9c 9c 9c`,
+so the classifier returns **4** and arm 4 is taken -- which fills the record
+through `jt 0x1452` with a type byte of 2, i.e. *stack*, matching
+`fn_21_04a6`'s stack arm at `0x83a`. A single +1 on a call that other code
+also makes is not evidence; the array read is.
 
-(An earlier version of this section said the destination record was empty. That
-was unsound -- the address dumped was a fixed one taken from one call's
-arguments, not necessarily the live record at each breakpoint, and other hits
-on the same address show non-zero contents. Disregard it.)
+If the kind really is 2, then the stack arm does run and its first
+instruction, `move.b d4,d0; bne.w $a88`, is the thing to check: d4 is the
+inverse of `fn_21_3978`, which asks "is this the stack we are already in" by
+comparing the destination name against `a5-0x9fe`. A wrong answer there would
+send the `go` straight past all of the stack handling to `0xa88`, silently,
+which is what is observed. That is the next thing to measure, and it should
+be measured by reading d4, not by counting calls.
 
 **Where the `go` gives up, named.** `fn_21_0fcc` reaches its general arm at
 `0x10e2` and calls `fn_21_04a6` -- the destination resolver -- at `0x1102`;
