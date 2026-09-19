@@ -91,7 +91,12 @@ static void bmshot(void){
     unsigned base=0, rb=0, h=0; char path[256];
     if(sscanf(spec, "%x:%u:%u:%255s", &base, &rb, &h, path) != 4) return;
     if(!rb || !h || rb > 4096 || h > 4096) return;
-    FILE *f = fopen(path, "wb");
+    /* Write then rename: this runs on every present, so a run ended by a
+     * timeout would otherwise leave a half-written file exactly when the
+     * picture is wanted. */
+    char tmp[300];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
     if(!f) return;
     fprintf(f, "P5\n%u %u\n255\n", rb*8, h);
     for(unsigned y=0;y<h;y++) for(unsigned x=0;x<rb*8u;x++){
@@ -99,6 +104,7 @@ static void bmshot(void){
         int bit = a < M.memsize ? (M.mem[a] >> (7-(x&7))) & 1 : 0;
         fputc(bit ? 0 : 255, f); }
     fclose(f);
+    remove(path); rename(tmp, path);
 }
 
 void plat_present(void){
