@@ -8,6 +8,15 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **Standing the catalogue in for `Home` was itself causing a crash.** With the
+  catalogue's Table of Contents stack renamed to `Home`, HyperCard's start-up
+  leaves a byte tag at `a5-0x49aa` at 0, `fn_9_1670` dispatches on 1..4 only,
+  and the fall-through raises its own assertion -- `ALRT 3003`, *"Unexpected
+  error 69320382"* -- and calls `ExitToShell`. With the real `Home` restored
+  the same build runs clean: 931,482 traps and 5,611 event-loop polls in the
+  run where the substitution managed 818 and zero. The catalogue has to be
+  navigated to, not substituted in.
+
 - **HyperTalk did not execute at all, and one missing decode boundary was why.**
   `CODE 12` is entered at offset `0x1322` through a computed jump -- no
   instruction anywhere in the binary names that address, so nothing put a
@@ -47,6 +56,24 @@ All notable changes to this project are documented here. Format follows
   `go to stack "WHOLE SYSTEMS"`.
 
 ### Added
+
+- **Menu Manager: `MenuSelect`, `MenuKey`, `GetMHandle`, `GetItem`, and a real
+  `CountMItems`.** All were missing; `MenuSelect` and `MenuKey` also leaked
+  their arguments. A title whose only route to a document is *File > Open* had
+  no route at all.
+
+  HyperCard 1.x turns a menu choice into a HyperTalk `doMenu "<item text>"`, so
+  it needs the item's **text**: it calls `GetMHandle`, then walks each menu with
+  `CountMItems` and `GetItem` looking for the name. `CountMItems` answering
+  zero meant the search never matched and HyperCard reported `Can't find menu
+  item "Open Stack..."`. Both now read the `MENU` resource the Resource Manager
+  shim already serves.
+
+  `MRMENU=<menuID>,<item>` makes the choice once, there being no menu to pull
+  down. The chain now runs end to end: a click in the menu bar becomes
+  `doMenu "Open Stack..."`, which executes and lands in Standard File, answered
+  by `MRDOC` with a well-formed `SFReply`. `SetItem` and `CheckItem` now pop
+  their arguments as well.
 
 - **`MRWATCH` now reports a callee that pops past its caller's frame.** A
   Pascal callee pops its own arguments, so SP legitimately comes back higher

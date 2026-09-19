@@ -874,15 +874,71 @@ void m68k_trap(uint16_t raw){
     case 0xA931: /*NewMenu*/ { uint32_t title=pop32(); (void)title; (void)pop16();
         m68k_w32(SP, heap_alloc(64)); } break;
     case 0xA935: /*InsertMenu*/ { (void)pop16(); (void)pop32(); } break;
+    /* A title that routes its menus through a script asks for the item's TEXT,
+     * not its number: HyperCard turns a choice into `doMenu "Open Stack..."`.
+     * Both of these were unimplemented, so the name came back empty and the
+     * choice did nothing. The text is read straight out of the MENU resource,
+     * which the Resource Manager shim already serves:
+     *   id(2) width(2) height(2) procID(2) filler(2) enableFlags(4)
+     *   title:Str, then each item Str + icon/key/mark/style(4), 0 terminates. */
+    case 0xA949: /*GetMHandle*/ { int16_t id=(int16_t)pop16();
+        m68k_w32(SP, res_get(0x4D454E55u /*'MENU'*/, id)); } break;
+    case 0xA946: /*GetItem*/ { uint32_t out=pop32(); int item=(int16_t)pop16();
+        uint32_t mh=pop32(), p = mh ? m68k_r32(mh) : 0, src=0; int len=0;
+        if(p){ uint32_t o = p + 14; o += 1u + m68k_r8(o);   /* past the title */
+               for(int i=1; i<=255; i++){ int l = m68k_r8(o);
+                   if(!l) break;
+                   if(i==item){ src=o+1; len=l; break; }
+                   o += 1u + (uint32_t)l + 4u; } }
+        if(out){ m68k_w8(out, (uint8_t)len);
+                 for(int i=0;i<len;i++) m68k_w8(out+1+i, m68k_r8(src+i)); }
+        if(len && getenv("MRTRACE")) fprintf(stderr, "  [menu] item %d text ok\n", item);
+    } break;
+    case 0xA947: /*SetItem*/   { (void)pop32(); (void)pop16(); (void)pop32(); } break;
     case 0xA934: /*ClearMenuBar*/ case 0xA937: /*DrawMenuBar*/ break;
     case 0xA933: /*AppendMenu*/ case 0xA94D: /*AppendResMenu*/ { (void)pop32(); (void)pop32(); } break;
     case 0xA939: /*EnableItem*/ case 0xA93A: /*DisableItem*/ { (void)pop16(); (void)pop32(); } break;
     case 0xA945: /*CheckItem*/ { (void)pop16(); (void)pop16(); (void)pop32(); } break;
     case 0xA938: /*HiliteMenu*/ case 0xA94C: /*FlashMenuBar*/ (void)pop16(); break;
+    /* MenuSelect/MenuKey both answer "which menu item", as menuID<<16|item, or
+     * 0 for "nothing chosen". Neither was implemented, so both leaked their
+     * arguments *and* left the menu bar inert -- a title whose only route to a
+     * document is File > Open has no route at all.
+     *
+     * MRMENU=<menuID>,<item> makes the choice once: there is no menu to pull
+     * down in a headless recomp, and a click in the menu bar is otherwise a
+     * click into nothing. For HyperCard 1.2.2, File is menu 2 (or 10 at the
+     * higher user levels) and "Open Stack..." is item 2, which lands in
+     * Standard File -- answered by MRDOC. */
+    case 0xA93D: /*MenuSelect*/ case 0xA93E: /*MenuKey*/ {
+        if(w == 0xA93D) (void)pop32(); else (void)pop16();
+        static int armed = -1; static uint32_t choice;
+        if(armed < 0){ const char *e = getenv("MRMENU"); armed = 0;
+            unsigned id, item;
+            if(e && sscanf(e, "%u,%u", &id, &item) == 2){
+                choice = ((uint32_t)id << 16) | (item & 0xFFFFu); armed = 1; } }
+        uint32_t r = 0;
+        if(armed == 1){ r = choice; armed = 0;
+            fprintf(stderr, "[menu] choosing menu %u item %u\n",
+                    (unsigned)(r >> 16), (unsigned)(r & 0xFFFFu)); }
+        m68k_w32(SP, r); } break;
     case 0xA93C: /*SetMenuBar*/ (void)pop32(); break;
     case 0xA93B: /*GetMenuBar*/ ret32(heap_alloc(4)); break;
     case 0xA948: /*CalcMenuSize*/ (void)pop32(); break;
-    case 0xA950: /*CountMItems*/ { (void)pop32(); ret16(0); } break;
+    /* CountMItems completes the search: a title looking a menu item up by name
+     * asks each menu how many items it has and reads them back one by one, so
+     * an answer of zero means the item is never found however well GetItem
+     * works. HyperCard calls this 24 times resolving one doMenu. */
+    case 0xA950: /*CountMItems*/ { uint32_t mh=pop32(), p = mh ? m68k_r32(mh) : 0;
+        int n = 0;
+        if(p){ uint32_t o = p + 14; o += 1u + m68k_r8(o);      /* past the title */
+               while(n < 255){ int l = m68k_r8(o); if(!l) break;
+                               n++; o += 1u + (uint32_t)l + 4u; } }
+        m68k_w16(SP, (uint16_t)n); } break;
+    /* Accepted and discarded, but their arguments must still come off: an
+     * unimplemented trap leaves them on the stack, and the leak shows up later
+     * as a frame that cannot be unwound. */
+
     case 0xADC0: /*GetNewMBar*/ { (void)pop16(); ret32(heap_alloc(4)); } break;
     case 0xA9C9: /*SysError*/ (void)pop16(); break;
 
@@ -1011,8 +1067,10 @@ void m68k_trap(uint16_t raw){
             for(int i=0;i<l;i++) m68k_w8(reply+11+i, (uint8_t)doc[i]);
         }
         if(getenv("MRFILE"))
-            fprintf(stderr,"[File] StandardFile selector %d -> %s\n",
-                    sel, give ? doc : "cancelled");
+            { fprintf(stderr,"[File] StandardFile selector %d reply=%06x -> %s [\n",
+                      sel, reply, give ? doc : "cancelled");
+              for(int i=0;i<16;i++) fprintf(stderr," %02x", m68k_r8(reply+i));
+              fprintf(stderr," ]\n"); }
         SP -= 4; m68k_w32(SP, ra);          /* put the return address back */
     } break;
 

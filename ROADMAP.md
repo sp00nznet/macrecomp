@@ -194,25 +194,24 @@ Lifting `CODE 12` with `--entry 0x1322` closes it:
 has ever run. The flag is per-title and passed by hand: a computed entry is
 invisible to static analysis, which is what `--entry` exists for.
 
-**It now stops one layer further in.** HyperCard sets a byte tag at
-`a5-0x49aa` as it parses -- the values go 2, 3, 4, 5 -- and `fn_9_1670`
-dispatches on it with a `subq.w #1 / beq` chain that handles **only 1 to 4**,
-falling through to `move.l #$421bebe` and HyperCard's own assertion reporter.
-The dialog is `ALRT 3003`, *"Unexpected error ^0."*, with `^0` = 69320382 =
-`0x0421BEBE` -- a hardcoded assertion id in `seg9+0x1728`, not a computed
-value. `fn_14_21c4` then clears the tag to 0, which is equally out of range.
-HyperCard beeps, shows the alert and calls `ExitToShell`.
+**The assertion that follows was self-inflicted.** Replacing `Home` with the
+catalogue's Table of Contents stack -- the trick used to get the catalogue on
+screen at all -- is what caused it. HyperCard sets a byte tag at `a5-0x49aa`
+during start-up; with the catalogue standing in for Home the tag ends at 0,
+`fn_9_1670` dispatches on 1..4 only, and the fall-through raises
+`0x421BEBE` -- *"Unexpected error 69320382"*, `ALRT 3003` -- and calls
+`ExitToShell`.
 
-So the next thread is HyperTalk's type tag at `a5-0x49aa`: either `seg14`
-should not reach 5, or `fn_9_1670`'s chain is short a case because an earlier
-`beq` was mis-lifted. Reproduce with `MRWATCHADDR=<a5-0x49aa>` (a5 is
-0x400000) and `MRBRK=591670 MRBRKA5=-18858`.
+**With the real Home stack in place HyperCard runs clean.** No error, no quit:
 
-**Honest trade:** before the fix HyperCard limped on a corrupted frame as far
-as its event loop and drew the top 53 rows of the card; after it, the internals
-are clean but it quits at the assertion before the event loop runs. Cleaner
-inside, less on screen. The corruption had to go first regardless -- every
-frame above it was wrong.
+| | catalogue as Home | real Home |
+|---|---|---|
+| traps in a 100 s run | 818 | **931,482** |
+| `GetNextEvent` | 0 | **5,611** |
+| error dialog | `ALRT 3003`, then quit | none |
+
+So the catalogue must be *navigated to*, not substituted for Home. That is what
+the Menu Manager work below is for.
 
 Two dead ends, recorded so they are not retried: hiding Home (`MRSKIP=Home`)
 does not let a catalogue stack be opened directly, because HyperCard errors on
@@ -237,6 +236,39 @@ Measured, with `MRHIT=1`: a click at 93,96 answers `PtInRect` true against
 is `on mouseUp / visual effect barn door open / go to stack "WHOLE SYSTEMS" /
 end mouseUp`. The click reaches the right control; what it cannot yet do is run
 the handler.
+
+### The menu bar was inert, and now reaches Standard File
+
+`MenuSelect`, `MenuKey`, `GetMHandle`, `GetItem` and a real `CountMItems` were
+all missing -- the first two also leaked their arguments. A title whose only
+route to a document is *File > Open* therefore had no route at all, and
+HyperCard 1.x turns a menu choice into a HyperTalk `doMenu "<item text>"`, so
+it needs the item's **text**, not its number. `GetItem` and `CountMItems` read
+that straight out of the `MENU` resource the Resource Manager shim already
+serves; without `CountMItems` the name search never matched and HyperCard
+reported `Can't find menu item "Open Stack..."` (`STR# 1002` string 13).
+
+`MRMENU=<menuID>,<item>` makes the choice once, since there is no menu to pull
+down. With `MRCLICK` putting a click in the menu bar, the chain now runs end to
+end:
+
+    MRCLICK=40,8,300 MRMENU=10,2 MRDOC="WHOLE EARTH"
+
+    [menu] choosing menu 10 item 2
+    [File] StandardFile selector 2 reply=3ef5f8 -> WHOLE EARTH [
+     01 00 53 54 41 4b ff ff 00 00 0b 57 48 4f 4c 45 ]
+
+-- a click in the menu bar, resolved to `doMenu "Open Stack..."`, executed, and
+landing in Standard File, which `MRDOC` answers with a well-formed `SFReply`:
+`good`=1, type `STAK`, vRefNum -1 (which is what this File Manager reports),
+name `WHOLE EARTH`.
+
+**Where it stops now.** HyperCard reads that reply, resolves the volume with
+`PBGetCatInfo` (selector 9, answered: root, dirID 2, 279 files) -- and then
+never opens the file. No `Open`, no `GetFileInfo`, no second `StandardFile`,
+and no error dialog; it returns to idling. The reply is not the problem, so the
+next thread is inside HyperCard's own open-stack path, after the point where
+the HAL has told it everything it asked.
 
 ### What "on screen and navigable" still needs
 
