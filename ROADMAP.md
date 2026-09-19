@@ -295,9 +295,25 @@ the one whose card art did reach the screen, leaves `a5-0x2396` null too. The
 card gets painted through the update path (`fn_21_633a` -> the WOBA expander),
 which does not need the card object; clicking does.
 
-So the thread is: what should call `jt 0x225a` (go to card), and why does
-nothing? Reproduce with `MRJT=225a` (never fires) and
-`MRWATCHADDR=<a5-0x2396>`, a5 being 0x400000.
+Pushing on that: `jt 0x225a` is called from `fn_1_214a`, which takes a menu ID
+and an item number -- it is HyperCard's **menu command dispatcher**, reached
+through a PC-relative jump table (`4EFB` at `seg1+0x2360`, fourteen word
+offsets at `0x2364`; the lifter follows it correctly, the table bytes merely
+disassemble as nonsense). So the routines that set the current card hang off
+menu commands, and `Go > First` is one of them.
+
+Driving that menu directly works and still does not produce a card:
+
+    MRCLICK=40,8,300 MRMENU=4,6        (Go > First)
+    [menu] choosing menu 4 item 6
+    [brk 51214a] args: 00060004 ... 05466972 7374    <- "First", resolved
+                                                        from the MENU resource
+
+`fn_1_214a` runs with the right menu and item, the item's name resolves, and
+`a5-0x2396` stays null. So HyperCard is not refusing to navigate for want of a
+command -- it behaves as though the open stack has no cards to navigate to.
+The next thread is therefore one level further back: whether the stack's card
+list (`MAST`/`LIST`/`PAGE`) is being built at all after the file is read.
 
 Knobs added along the way: `MRJT=<hex a5off>` resolves a jump-table call to its
 target, `MRHOLD` sets how long a synthetic press is held, and `FindWindow` now
