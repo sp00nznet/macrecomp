@@ -54,25 +54,36 @@ static uint32_t call_end32(void){
     uint32_t v = g_rsz==2 ? m68k_r16(SP) : m68k_r32(SP);
     SP = g_sp0; return v;
 }
+/* A Pascal Boolean occupies the 2-byte result slot but is read as a BYTE at the
+ * slot's address: compiled code does `move.b (a7)+,d0`, which on a big-endian
+ * machine takes the HIGH byte. Reading the slot as a word and comparing with 1
+ * -- which this check used to do -- passes only against a HAL that puts the
+ * value in the wrong half, and every Boolean trap then reads as false to a real
+ * title. HyperCard's card composite is gated on exactly this. */
+static int call_endbool(void){
+    CHECK(SP==g_sp0-(uint32_t)g_rsz, "stack unbalanced: SP=%x expected %x", SP, g_sp0-g_rsz);
+    int v = (int)m68k_r8(SP);
+    SP = g_sp0; return v;
+}
 
 static void test_pascal_results(void){
     printf("Pascal result convention\n");
     /* SectRect(a, b, VAR dst): Boolean */
     uint32_t a=rect(0,0,100,100), b=rect(50,50,150,150), dst=rect(0,0,0,0);
     call_begin(2); push32(a); push32(b); push32(dst); TRAP(0xA8AA);
-    CHECK(call_end32()==1, "SectRect should report an intersection");
+    CHECK(call_endbool(), "SectRect should report an intersection");
     CHECK(rd16(dst+2)==50 && rd16(dst)==50, "SectRect dst = (50,50,...), got (%d,%d)",
           rd16(dst+2), rd16(dst));
 
     uint32_t far_=rect(900,900,950,950);
     call_begin(2); push32(a); push32(far_); push32(dst); TRAP(0xA8AA);
-    CHECK(call_end32()==0, "disjoint rects should not intersect");
+    CHECK(!call_endbool(), "disjoint rects should not intersect");
 
     /* PtInRect(pt, r): Boolean -- the Point is by value, not a pointer */
     call_begin(2); push32(point(10,10)); push32(a); TRAP(0xA8AD);
-    CHECK(call_end32()==1, "(10,10) is inside (0,0,100,100)");
+    CHECK(call_endbool(), "(10,10) is inside (0,0,100,100)");
     call_begin(2); push32(point(500,500)); push32(a); TRAP(0xA8AD);
-    CHECK(call_end32()==0, "(500,500) is outside (0,0,100,100)");
+    CHECK(!call_endbool(), "(500,500) is outside (0,0,100,100)");
 }
 
 static void test_regions(void){
@@ -83,30 +94,30 @@ static void test_regions(void){
     CHECK(r1 && r2 && r3 && r1!=r2, "NewRgn should return distinct handles");
 
     call_begin(2); push32(r1); TRAP(0xA8E2);                    /* EmptyRgn */
-    CHECK(call_end32()==1, "a fresh region is empty");
+    CHECK(call_endbool(), "a fresh region is empty");
 
     /* SetRectRgn(rgn, l, t, r, b) */
     push32(r1); push16(0); push16(0); push16(100); push16(100); TRAP(0xA8DE);
     push32(r2); push16(50); push16(50); push16(150); push16(150); TRAP(0xA8DE);
 
     call_begin(2); push32(r1); TRAP(0xA8E2);
-    CHECK(call_end32()==0, "a region set to a real rect is not empty");
+    CHECK(!call_endbool(), "a region set to a real rect is not empty");
 
     push32(r1); push32(r2); push32(r3); TRAP(0xA8E4);           /* SectRgn */
     call_begin(2); push32(point(60,60)); push32(r3); TRAP(0xA8E8);  /* PtInRgn */
-    CHECK(call_end32()==1, "(60,60) is in the 50..100 overlap");
+    CHECK(call_endbool(), "(60,60) is in the 50..100 overlap");
     call_begin(2); push32(point(20,20)); push32(r3); TRAP(0xA8E8);
-    CHECK(call_end32()==0, "(20,20) is outside the overlap");
+    CHECK(!call_endbool(), "(20,20) is outside the overlap");
 
     push32(r1); push32(r2); push32(r3); TRAP(0xA8E5);           /* UnionRgn */
     call_begin(2); push32(point(140,140)); push32(r3); TRAP(0xA8E8);
-    CHECK(call_end32()==1, "(140,140) is inside the union");
+    CHECK(call_endbool(), "(140,140) is inside the union");
 
     /* DiffRgn where b covers a: the bbox model represents that one exactly */
     push32(r2); push16(0); push16(0); push16(200); push16(200); TRAP(0xA8DE);
     push32(r1); push32(r2); push32(r3); TRAP(0xA8E6);
     call_begin(2); push32(r3); TRAP(0xA8E2);
-    CHECK(call_end32()==1, "a - b is empty when b covers a");
+    CHECK(call_endbool(), "a - b is empty when b covers a");
 }
 
 /* Build a DITL: count-1, then per item 4 placeholder + 8 rect + type + len + data. */

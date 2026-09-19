@@ -39,6 +39,7 @@ int plat_open(const char *title, int scale){
 /* MRSHOT=<path> writes the framebuffer to a PGM on every present (overwriting),
  * so a run can be inspected without a display -- useful for CI and for capturing
  * a frame from a title that is sitting in a modal loop. */
+static int screen_px(int x, int y);
 static void shot(void){
     const char *path = getenv("MRSHOT");
     if(!path) return;
@@ -46,7 +47,7 @@ static void shot(void){
      * that clears the screen on the way out would otherwise replace the one
      * frame worth keeping with a blank one. */
     {   int any=0;
-        for(int y=0;y<QD_H&&!any;y++) for(int x=0;x<QD_W;x++) if(qd_fb[y][x]){ any=1; break; }
+        for(int y=0;y<QD_H&&!any;y++) for(int x=0;x<QD_W;x++) if(screen_px(x,y)){ any=1; break; }
         if(!any) return; }
     /* Write then rename: this runs on every present, so a run killed by a
      * timeout would otherwise leave a half-written file exactly when the
@@ -56,7 +57,7 @@ static void shot(void){
     FILE *f = fopen(tmp, "wb");
     if(!f) return;
     fprintf(f, "P5\n%d %d\n255\n", QD_W, QD_H);
-    for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) fputc(qd_fb[y][x] ? 0 : 255, f);
+    for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) fputc(screen_px(x,y) ? 0 : 255, f);
     fclose(f);
     remove(path); rename(tmp, path);
 }
@@ -107,13 +108,24 @@ static void bmshot(void){
     remove(path); rename(tmp, path);
 }
 
+/* A pixel is set if QuickDraw drew it into qd_fb or the title blitted it
+ * straight into screen memory. HyperCard paints its card with its own blitter,
+ * so showing qd_fb alone leaves the card invisible however well it rendered. */
+static int screen_px(int x, int y){
+    if(qd_fb[y][x]) return 1;
+    uint32_t base = mr_screen_base();
+    if(!base) return 0;
+    uint32_t a = base + (uint32_t)y * (QD_W/8) + (uint32_t)(x >> 3);
+    return a < M.memsize ? (M.mem[a] >> (7 - (x & 7))) & 1 : 0;
+}
+
 void plat_present(void){
     shot(); bmshot();
     if(!tex) return;
     uint32_t *px; int pitch;
     SDL_LockTexture(tex, NULL, (void**)&px, &pitch);
     for(int y=0;y<QD_H;y++){ uint32_t *row=(uint32_t*)((uint8_t*)px+y*pitch);
-        for(int x=0;x<QD_W;x++) row[x] = qd_fb[y][x] ? 0xFF000000u : 0xFFFFFFFFu; }
+        for(int x=0;x<QD_W;x++) row[x] = screen_px(x,y) ? 0xFF000000u : 0xFFFFFFFFu; }
     SDL_UnlockTexture(tex);
     SDL_RenderClear(ren); SDL_RenderCopy(ren,tex,NULL,NULL); SDL_RenderPresent(ren);
 }

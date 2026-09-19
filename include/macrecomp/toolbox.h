@@ -29,6 +29,10 @@ extern uint8_t qd_fb[QD_H][QD_W];       /* 1 byte/pixel, 0=white 1=black (simple
 void qd_init(void);
 void qd_pen_to(int h, int v);
 void qd_get_pen(int *h, int *v);
+/* Base of the 1-bit screen block in guest memory. QuickDraw draws into qd_fb,
+ * but a title that blits with its own code writes here, so the presented frame
+ * is the union of the two. */
+uint32_t mr_screen_base(void);
 void qd_line_to(int h, int v);
 void qd_line(int dh, int dv);
 void qd_pen_size(int w, int h);

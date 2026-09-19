@@ -18,6 +18,12 @@ static uint32_t pop32(void){ uint32_t v=m68k_r32(SP); SP+=4; return v; }
  * Write there -- pushing would leave SP two bytes short and put the result
  * where nothing reads it. */
 static void ret16(uint16_t v){ m68k_w16(SP,v); }
+/* A Pascal Boolean result occupies the 2-byte result slot but is read as a
+ * BYTE at the slot's address -- compiled code does `move.b (a7)+,d0`, which on
+ * a big-endian machine takes the HIGH byte. Returning it with ret16 puts the
+ * value in the low byte, so every Boolean trap reads as false however correct
+ * the answer was. */
+static void retbool(int v){ m68k_w16(SP, v ? 0x0100u : 0x0000u); }
 static void ret32(uint32_t v){ m68k_w32(SP,v); }
 /* A Point argument is passed by value in a long: v in the high word, h in the low. */
 static void pt_unpack(uint32_t v, int *h, int *vv){ *vv=(int16_t)(v>>16); *h=(int16_t)(v&0xFFFF); }
@@ -37,10 +43,14 @@ static void wr_rect(uint32_t p,const Rect*r){ m68k_w16(p,r->top); m68k_w16(p+2,r
  * so that the address is a real one and comparisons against it hold. */
 static uint32_t heap_alloc(uint32_t sz);
 static uint32_t g_screen_base;
+uint32_t mr_screen_base(void);
 static uint32_t screen_base(void){
     if(!g_screen_base) g_screen_base = heap_alloc((uint32_t)QD_H * (QD_W/8));
     return g_screen_base;
 }
+/* The platform layer needs it too: a title that blits with its own code
+ * writes into this block, not into qd_fb. */
+uint32_t mr_screen_base(void){ return screen_base(); }
 static uint32_t g_front_win;   /* the one card window, for FindWindow */
 static int g_update_pending;   /* an updateEvt the app has not been given yet */
 static int g_peek_valid, g_peek_what, g_peek_msg, g_peek_h, g_peek_v;
@@ -580,12 +590,12 @@ void m68k_trap(uint16_t raw){
         if(getenv("MRGFX")){ static int n; if(n++<20)
             fprintf(stderr,"[gfx] SectRect (%d,%d,%d,%d) x (%d,%d,%d,%d) -> %d\n",
                 ra.top,ra.left,ra.bottom,ra.right, rb.top,rb.left,rb.bottom,rb.right, nz); }
-        ret16(nz?1:0); } break;
+        retbool(nz); } break;
     case 0xA8AB: /*UnionRect*/ { uint32_t dst=pop32(),b=pop32(),a=pop32();
         Rect ra=rd_rect(a),rb=rd_rect(b),o; rect_union(&ra,&rb,&o); wr_rect(dst,&o); } break;
     case 0xA8AD: /*PtInRect*/ { uint32_t rp=pop32(); uint32_t pt=pop32();
         int h,v; pt_unpack(pt,&h,&v); Rect rr=rd_rect(rp);
-        ret16(pt_in_rect(h,v,&rr)?1:0); } break;
+        retbool(pt_in_rect(h,v,&rr)); } break;
 
     /* ---- QuickDraw: drawing ---- */
     case 0xA893: /*MoveTo*/ { int16_t v=pop16(),h=pop16(); qd_pen_to(h,v); } break;
@@ -619,8 +629,8 @@ void m68k_trap(uint16_t raw){
     case 0xA975: /*TickCount*/ ret32(plat_ticks()); break;
     case 0xA972: /*GetMouse*/ { uint32_t pt=pop32(); int h,v; plat_get_mouse(&h,&v);
         m68k_w16(pt,v); m68k_w16(pt+2,h); } break;
-    case 0xA974: /*Button*/ ret16(plat_button()?1:0); break;
-    case 0xA973: /*StillDown*/ ret16(plat_button()?1:0); break;
+    case 0xA974: /*Button*/ retbool(plat_button()); break;
+    case 0xA973: /*StillDown*/ retbool(plat_button()); break;
     /* EventAvail reports the next event and *leaves it in the queue*;
      * GetNextEvent removes it. Sharing one implementation meant every peek ate
      * an event, so a title that polls with EventAvail and then fetches with
@@ -689,7 +699,7 @@ void m68k_trap(uint16_t raw){
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
                  int mh,mv; plat_get_mouse(&mh,&mv); m68k_w16(evp+10,mv); m68k_w16(evp+12,mh);
                  m68k_w16(evp+14, what==8 ? 1 : 0); }   /* activeFlag */
-        ret16(got?1:0); } break;
+        retbool(got); } break;
 
     /* ---- cursor / port (mostly no-ops; QuickDraw draws to one framebuffer) ---- */
     case 0xA852: /*HideCursor*/ case 0xA853: /*ShowCursor*/ case 0xA856: /*ObscureCursor*/
@@ -798,7 +808,7 @@ void m68k_trap(uint16_t raw){
     case 0xA91B: /*MoveWindow*/ (void)pop16(); (void)pop16(); (void)pop16(); (void)pop32(); break;
     case 0xA91D: /*SizeWindow*/ (void)pop16(); (void)pop16(); (void)pop16(); (void)pop32(); break;
     case 0xA8A6: /*EqualRect*/ { Rect b=rd_rect(pop32()), a=rd_rect(pop32());
-        ret16((uint16_t)(a.top==b.top && a.left==b.left &&
+        retbool((a.top==b.top && a.left==b.left &&
                          a.bottom==b.bottom && a.right==b.right)); } break;
     case 0xA9B9: /*GetCursor*/ { (void)pop16();
         /* No cursor artwork is drawn, but the handle must be real: callers
@@ -810,7 +820,7 @@ void m68k_trap(uint16_t raw){
         if(getenv("MRGFX")){ static int n; if(n++<25)
             fprintf(stderr,"[gfx] EmptyRect %d,%d,%d,%d -> %d\n",
                 r.top,r.left,r.bottom,r.right,rect_empty(&r)); }
-        ret16((uint16_t)(r.right<=r.left || r.bottom<=r.top)); } break;
+        retbool(r.right<=r.left || r.bottom<=r.top); } break;
     case 0xA919: /*GetWTitle*/ { uint32_t nm=pop32(); (void)pop32();
         if(nm) m68k_w8(nm,0); } break;                  /* untitled: one port */
     case 0xA936: /*DeleteMenu*/ (void)pop16(); break;
@@ -1165,13 +1175,13 @@ void m68k_trap(uint16_t raw){
         rgn_put(d,&o); } break;
     case 0xA8E7: /*XOrRgn*/ { uint32_t d=pop32(),b=pop32(),a=pop32();
         Rect ra=rgn_get(a),rb=rgn_get(b),o; rect_union(&ra,&rb,&o); rgn_put(d,&o); } break;
-    case 0xA8E2: /*EmptyRgn*/ { Rect r=rgn_get(pop32()); ret16(rect_empty(&r)?1:0); } break;
+    case 0xA8E2: /*EmptyRgn*/ { Rect r=rgn_get(pop32()); retbool(rect_empty(&r)); } break;
     case 0xA8E3: /*EqualRgn*/ { uint32_t b=pop32(),a=pop32(); Rect ra=rgn_get(a),rb=rgn_get(b);
-        ret16((ra.top==rb.top&&ra.left==rb.left&&ra.bottom==rb.bottom&&ra.right==rb.right)?1:0); } break;
+        retbool(ra.top==rb.top&&ra.left==rb.left&&ra.bottom==rb.bottom&&ra.right==rb.right); } break;
     case 0xA8E8: /*PtInRgn*/ { uint32_t h=pop32(),pt=pop32(); int ph,pv; pt_unpack(pt,&ph,&pv);
-        Rect r=rgn_get(h); ret16(pt_in_rect(ph,pv,&r)?1:0); } break;
+        Rect r=rgn_get(h); retbool(pt_in_rect(ph,pv,&r)); } break;
     case 0xA8E9: /*RectInRgn*/ { uint32_t h=pop32(),rp=pop32();
-        Rect a=rd_rect(rp),b=rgn_get(h),o; ret16(rect_sect(&a,&b,&o)?1:0); } break;
+        Rect a=rd_rect(rp),b=rgn_get(h),o; retbool(rect_sect(&a,&b,&o)); } break;
     case 0xA8D2: /*FrameRgn*/ { Rect r=rgn_get(pop32()); qd_frame_rect(&r); } break;
     case 0xA8D3: /*PaintRgn*/ { Rect r=rgn_get(pop32()); qd_paint_rect(&r); } break;
     case 0xA8D4: /*EraseRgn*/ { Rect r=rgn_get(pop32()); qd_erase_rect(&r); } break;
@@ -1246,7 +1256,7 @@ void m68k_trap(uint16_t raw){
         dlg_param_text(p0,p1,p2,p3); } break;
     case 0xA984: /*FindDialogItem*/ { uint32_t pt=pop32(), d=pop32(); int ph,pv;
         pt_unpack(pt,&ph,&pv); ret16((uint16_t)(int16_t)dlg_find_item(d,ph,pv)); } break;
-    case 0xA97F: /*IsDialogEvent*/ { (void)pop32(); ret16(g_front_dlg?1:0); } break;
+    case 0xA97F: /*IsDialogEvent*/ { (void)pop32(); retbool(g_front_dlg!=0); } break;
     case 0xA980: /*DialogSelect*/ { uint32_t ip=pop32(), dp=pop32(); (void)pop32();
         if(dp) m68k_w32(dp,g_front_dlg); if(ip) m68k_w16(ip,0); ret16(0); } break;
     case 0xA979: /*CouldDialog*/ case 0xA97A: /*FreeDialog*/ (void)pop16(); break;
@@ -1284,7 +1294,7 @@ void m68k_trap(uint16_t raw){
     /* ---- Toolbox utilities ---- */
     case 0xA85D: /*BitTst*/ { uint32_t bit=pop32(), ptr=pop32();
         /* Mac bit 0 is the most significant bit of the first byte */
-        uint32_t byte=m68k_r8(ptr + (bit>>3)); ret16(((byte>>(7-(bit&7)))&1)?1:0); } break;
+        uint32_t byte=m68k_r8(ptr + (bit>>3)); retbool((byte>>(7-(bit&7)))&1); } break;
     case 0xA85E: /*BitSet*/ { uint32_t bit=pop32(), ptr=pop32(); uint32_t a=ptr+(bit>>3);
         m68k_w8(a, m68k_r8(a) | (0x80u>>(bit&7))); } break;
     case 0xA85F: /*BitClr*/ { uint32_t bit=pop32(), ptr=pop32(); uint32_t a=ptr+(bit>>3);

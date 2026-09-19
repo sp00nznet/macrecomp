@@ -8,6 +8,29 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **Every Pascal Boolean trap was returning false.** A Boolean result occupies
+  the 2-byte result slot but is read as a *byte at the slot's address*: compiled
+  code does `move.b (a7)+,d0`, which on a big-endian machine takes the **high**
+  byte. `ret16` put the value in the low byte, so `SectRect`, `EmptyRect`,
+  `PtInRect`, `EqualRect`, `EmptyRgn`, `EqualRgn`, `PtInRgn`, `RectInRgn`,
+  `Button`, `StillDown`, `GetNextEvent`, `EventAvail`, `IsDialogEvent` and
+  `BitTst` all answered false however correct the answer was.
+
+  This is what kept the card off the screen. HyperCard's composite,
+  `fn_16_05c0`, begins by intersecting the card rect with the region to repaint
+  and returns early if they miss; `SectRect` saying "no" every time meant it
+  exited on its first instruction, 6850 times a run, and the blit faithfully
+  copied an empty buffer. With the convention right, **HyperCard composites the
+  card: buffer A goes from 0 to 17657 pixels and a card frame, border and
+  content bands appear in it.**
+
+  The HAL selftest asserted the wrong convention -- it read the slot as a word
+  and compared with 1, which passes only against a HAL that puts the value in
+  the wrong half. It now reads the byte, as a title does.
+- **The presented frame is the union of `qd_fb` and guest screen memory.**
+  QuickDraw draws into `qd_fb`, but a title that blits with its own code writes
+  straight into the screen block, and showing `qd_fb` alone leaves that
+  invisible.
 - **`ASL` computed its overflow flag from the endpoints.** V is set if the sign
   bit changes at *any* point during the shift, not merely if the first and last
   signs differ: `0x40000000` shifted left twice passes through `0x80000000` and
