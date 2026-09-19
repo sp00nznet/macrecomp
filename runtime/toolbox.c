@@ -543,6 +543,8 @@ void m68k_trap(uint16_t raw){
 
     /* ---- QuickDraw: pen & text state ---- */
     case 0xA873: /*SetPort*/ { uint32_t p=pop32(); g_cur_port=p;
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] SetPort %06x base=%06x\n",
+            (unsigned)p, (unsigned)(p?m68k_r32(p+2):0));
         if(p){ set_target_from_bitmap(p+2);
             /* The clip belongs to the port, not to QuickDraw as a whole. It was
              * global here, so a clip narrowed for one offscreen port stayed in
