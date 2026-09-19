@@ -444,6 +444,25 @@ truncation" was a wrong turn.
 What is left is one bug: the `pass` parse error, whose dialog is re-posted on
 every idle and paints over the card.
 
+**What is known about it.** HyperTalk's keywords are `WTLK 4`: `do, else, end,
+exit, global, if, next, pass, repeat, return, send, then, ...` -- 40 words,
+`pass` is the eighth. All four `WTLK` resources load correctly at run time, so
+the word itself is recognised; the failure is on the message name after it.
+The reported string is `STR# 1002` #53, `Can't understand what's after "^0"`,
+and it is *reported* by `fn_14_0e58`, which only fires when the parse state
+`a5-0x5524` already holds `0x8001` -- so the failure is recorded earlier and
+that function is not the site.
+
+Checked and cleared: every word-indexed `4EFB` dispatch arm has a decode
+boundary (`find_entries.py`, 0 missing), the only byte-indexed table in the
+binary is the WOBA one and its arms are fine, and `seg14+0x0aa8` -- which sets
+`0x8001` directly -- is the `else` handler (its error `0x42` is #66,
+`Found "else" without "then"`), not this. The remaining writers of
+`a5-0x5524` are at `seg14+0x0aec`, `0x0c76` and `0x0dc4`, which store computed
+values; one of those is the site.
+
+
+
 - **The card stops at row 53 of 342, and the mechanism is now known.** The
   blit source (`a5-0x1318` = 0x84932c) holds 7,707 lit pixels across rows 0-52
   and nothing below. Both of the catalogue's `BMAP` blocks are read in full --
