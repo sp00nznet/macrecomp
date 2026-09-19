@@ -77,6 +77,7 @@ static void port_regions(uint32_t p, const Rect *r){
 #define MAX_WINS 32
 static uint32_t g_wins[MAX_WINS]; static int g_nwins;
 static int g_win_pending[MAX_WINS];
+static int g_win_activate[MAX_WINS];   /* owes an activateEvt */
 static int win_index(uint32_t w){
     for(int i=0;i<g_nwins;i++) if(g_wins[i]==w) return i;
     if(g_nwins < MAX_WINS){ g_wins[g_nwins]=w; g_win_pending[g_nwins]=0; return g_nwins++; }
@@ -648,6 +649,24 @@ void m68k_trap(uint16_t raw){
          * draw. Deliver it once per exposure -- clearing on delivery rather
          * than waiting for BeginUpdate means an app that never calls
          * BeginUpdate cannot spin on it. */
+        /* A window is not active until the Window Manager says so, and a Mac
+         * application will not draw into an inactive window's content -- it
+         * waits, exactly as it waits for an updateEvt. Nothing here raised one,
+         * so the card window was shown, marked visible, given an update, and
+         * still treated as belonging to somebody else. Activate comes first:
+         * the app expects to be told it owns the window before it is told to
+         * paint it. modifiers bit 0 is activeFlag. */
+        if(!got){
+            for(int i=0;i<g_nwins;i++){
+                uint32_t wp = g_wins[i];
+                if(!wp || !g_win_activate[i] || !m68k_r8(wp+110)) continue;
+                what = 8 /*activateEvt*/; msg = (int)wp; got = 1;
+                if(!peek) g_win_activate[i] = 0;
+                if(getenv("MRTRACE")) fprintf(stderr,"  activateEvt -> window %06x\n",
+                    (unsigned)wp);
+                break;
+            }
+        }
         if(!got){
             /* One update per dirty, visible window. The pending flag is the
              * gate rather than the region itself, so a title that ignores the
@@ -664,7 +683,7 @@ void m68k_trap(uint16_t raw){
         }
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
                  int mh,mv; plat_get_mouse(&mh,&mv); m68k_w16(evp+10,mv); m68k_w16(evp+12,mh);
-                 m68k_w16(evp+14,0); }
+                 m68k_w16(evp+14, what==8 ? 1 : 0); }   /* activeFlag */
         ret16(got?1:0); } break;
 
     /* ---- cursor / port (mostly no-ops; QuickDraw draws to one framebuffer) ---- */
@@ -735,7 +754,8 @@ void m68k_trap(uint16_t raw){
         uint32_t w = pop32();
         if(getenv("MRGFX")) fprintf(stderr,"[gfx] %s %06x\n",
             w==0?"Show/Select NULL":(norm(raw)==0xA915?"ShowWindow":"SelectWindow"), (unsigned)w);
-        if(w){ g_front_win = w; m68k_w8(w+110, 1); m68k_w8(w+111, 1); win_dirty(w, 1); }
+        if(w){ g_front_win = w; m68k_w8(w+110, 1); m68k_w8(w+111, 1); win_dirty(w, 1);
+               int i = win_index(w); if(i>=0) g_win_activate[i] = 1; }
         g_update_pending = 1; } break;
     /* Inval/Valid apply to the CURRENT PORT, not to whichever window is front:
      * validating one window was clearing another's pending update, so the card
