@@ -8,6 +8,14 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **`ASL` computed its overflow flag from the endpoints.** V is set if the sign
+  bit changes at *any* point during the shift, not merely if the first and last
+  signs differ: `0x40000000` shifted left twice passes through `0x80000000` and
+  back to 0, so V is set even though it starts and ends positive. Comparing only
+  the endpoints misses exactly the cases V exists to catch, and every signed
+  branch after an `ASL` then takes the wrong arm. Found by adding eight signed
+  condition-code cases to the differential check (46 -> **54**), which also
+  confirmed `slt`/`sge`/`sgt`/`sle` and `subq`'s V are right.
 - **The HyperTalk parse error is gone.** `Can't understand what's after "end"`
   was never about the script: the lifter's linear decode drifted through a table
   of data embedded in `fn_17_0ec6`, and because 68k instructions are

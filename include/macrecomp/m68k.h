@@ -120,10 +120,19 @@ static inline uint32_t m68k_lsr(uint32_t v,int c,int sz){
     if(c){ M.c=M.x=(v>>(c-1))&1; v=(v>>c)&m; } else M.c=0;
     M.n=(v&msb(sz))!=0; M.z=(v==0); M.v=0; return v;
 }
-static inline uint32_t m68k_asl(uint32_t v,int c,int sz){ /* == lsl but keep it distinct for V */
-    uint32_t m=szmask(sz),mb=msb(sz); v&=m; int sign=(v&mb)!=0;
-    if(c){ M.c=M.x=(v>>(sz*8-c))&1; v=(v<<c)&m; } else M.c=0;
-    M.n=(v&mb)!=0; M.z=(v==0); M.v=((v&mb)!=0)!=sign; return v;
+/* ASL's V is set if the sign bit changed at ANY point during the shift, not
+ * merely if the first and last signs differ: 0x40000000 shifted left twice
+ * passes through 0x80000000 and back to 0, so V is set even though it starts
+ * and ends positive. Comparing only the endpoints misses exactly the cases V
+ * exists to catch, and every signed branch after an ASL then takes the wrong
+ * arm. Shifting one bit at a time is what makes that observable; counts are
+ * 0-63 so the loop is cheap. */
+static inline uint32_t m68k_asl(uint32_t v,int c,int sz){
+    uint32_t m=szmask(sz),mb=msb(sz); v&=m; uint32_t sign=v&mb; int ov=0;
+    if(c){ for(int i=0;i<c;i++){ M.c=M.x=(v&mb)!=0; v=(v<<1)&m;
+                                 if((v&mb)!=sign) ov=1; } }
+    else M.c=0;
+    M.n=(v&mb)!=0; M.z=(v==0); M.v=ov; return v;
 }
 static inline uint32_t m68k_asr(uint32_t v,int c,int sz){
     uint32_t m=szmask(sz),mb=msb(sz); v&=m; uint32_t sign=v&mb;

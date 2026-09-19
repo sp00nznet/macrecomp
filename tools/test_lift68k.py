@@ -37,6 +37,65 @@ RTS = b"\x4e\x75"
 
 CASES = [
     dict(
+        # The signed overflow case: 0x8000 - 1 is 0x7fff, which flips a negative
+        # into a positive, so V is set. Every signed branch reads V, and a
+        # recompiler that computes it from the result alone gets this wrong.
+        name="subq.w overflows 0x8000 -> 0x7fff and sets V",
+        code=bytes.fromhex("5340") + bytes.fromhex("59c1") + RTS,  # subq.w #1,d0 ; svs.b d1
+        setup="SET_DW(0,0x8000);",
+        checks=[("DW(0)", 0x7FFF), ("DB(1)", 0xFF), ("M.v", 1)],
+    ),
+    dict(
+        name="subq.w without overflow leaves V clear",
+        code=bytes.fromhex("5340") + bytes.fromhex("59c1") + RTS,
+        setup="SET_DW(0,0x0100);",
+        checks=[("DW(0)", 0x00FF), ("DB(1)", 0x00), ("M.v", 0)],
+    ),
+    dict(
+        # slt is N!=V, not "the result looked negative". Comparing 1 against
+        # -1 as words, 1 - (-1) = 2 with no overflow, so N=0, V=0 and slt is
+        # false -- 1 is not less than -1.
+        name="slt after cmp.w 1 vs -1 is false",
+        code=bytes.fromhex("b041") + bytes.fromhex("5dc2") + RTS,  # cmp.w d1,d0 ; slt.b d2
+        setup="SET_DW(0,1); SET_DW(1,0xFFFF);",
+        checks=[("DB(2)", 0x00)],
+    ),
+    dict(
+        name="slt after cmp.w -1 vs 1 is true",
+        code=bytes.fromhex("b041") + bytes.fromhex("5dc2") + RTS,
+        setup="SET_DW(0,0xFFFF); SET_DW(1,1);",
+        checks=[("DB(2)", 0xFF)],
+    ),
+    dict(
+        # The pair that only overflow separates: 0x8000 - 1 sets V, so N==V
+        # and sge is TRUE even though the result has the high bit clear.
+        name="sge is true when the comparison overflowed",
+        code=bytes.fromhex("b041") + bytes.fromhex("5cc2") + RTS,
+        setup="SET_DW(0,0x8000); SET_DW(1,1);",
+        checks=[("DB(2)", 0x00)],
+    ),
+    dict(
+        name="sgt and sle disagree exactly once, at equality",
+        code=bytes.fromhex("b041") + bytes.fromhex("5ec2") + RTS,  # sgt
+        setup="SET_DW(0,5); SET_DW(1,5);",
+        checks=[("DB(2)", 0x00)],
+    ),
+    dict(
+        name="sle is true at equality",
+        code=bytes.fromhex("b041") + bytes.fromhex("5fc2") + RTS,  # sle
+        setup="SET_DW(0,5); SET_DW(1,5);",
+        checks=[("DB(2)", 0xFF)],
+    ),
+    dict(
+        # asl sets V if the sign changed at ANY point in the shift, not merely
+        # if the first and last signs differ. Shifting 0x40000000 left twice
+        # passes through 0x80000000 and back to 0, so V must be set.
+        name="asl.l sets V when the sign changes mid-shift",
+        code=bytes.fromhex("e580") + RTS,                          # asl.l #2,d0
+        setup="SET_DL(0,0x40000000);",
+        checks=[("M.d[0]", 0), ("M.v", 1)],
+    ),
+    dict(
         name="addx.l carries the X flag in",
         code=bytes.fromhex("d181") + RTS,           # addx.l d1,d0
         setup="M.d[0]=1; M.d[1]=2; M.x=1;",
