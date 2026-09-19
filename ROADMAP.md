@@ -492,7 +492,16 @@ So the site that records this particular error has not been found yet, and the
 `d0 = depth-1; state = stack[d0]`, and `fn_14_0aa8` -- the `else` handler --
 refuses unless the state is 5 or 6, reporting `STR# 1002` #66,
 `Found "else" without "then"`. Watching `a5-0x576a` and `a5-0x57eb` while the
-catalogue's `on idle` compiles is the way in.
+catalogue's `on idle` compiles is the way in. Measured (`MRWATCHADDR=3FA815`
+with a5 at 0x400000), the state walks
+
+    02 04 06 04 06 07 04 06 07 06 02
+
+written by `fn_9_3794` (2 and 4), `fn_9_4068` (6 and 7), `fn_14_11d4` and
+`fn_9_408a` (the pops). So 4 looks like *inside `if`*, 6 like *after `then`*,
+7 like *after `else`* -- and the `else` handler's demand for 5 or 6 is met by
+the 6s, so `else` itself is **not** failing. Whatever records the `pass` error
+is elsewhere again.
 
 
 
