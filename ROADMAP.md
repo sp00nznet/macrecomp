@@ -475,10 +475,31 @@ Two HAL faults were behind it, both general rather than HyperCard-specific:
   right amount; and the copy primitives' Duff's-device jump (`4efb 1002` at
   `seg17+0x10aa`) lands on decoded boundaries too.
 
-  What is left is the opcode handling in `fn_21_59e2` itself -- the `0x80` to
-  `0xbf` arms and the repeat counter at `-$152(a6)` -- and the possibility that
-  the shared source pointer `-$32(a6)` is advanced wrongly by one of them.
+  **The within-row opcode set, decoded from the table at `seg18+0x1e2a`.**
+  That table is 128 bytes of `0x8e,0x8c,...,0x80` in blocks of sixteen, and
+  the jump target is `0x1e2a + table[op]` into a chain of `move.b (a0)+,(a1)+`
+  ending at `0x1eb8`, so the count is `(0x8e - table[op]) / 2`. It works out
+  exactly as:
 
+  | opcode | meaning |
+  |---|---|
+  | `0x00-0x7f` | skip `op & 0x0f` bytes, then copy `op >> 4` |
+  | `0x80-0xbf` | end of row (`bra $1ebe`, return) |
+  | `0xc0-0xdf` | copy `op & 0x1f` bytes |
+  | `0xe0-0xff` | skip `(op & 0x1f) * 16` -- `lsl.b #3` then `adda.w d0,a1` **twice** |
+
+  A reference decoder built from this gets 342 rows out of `BMAP 4202` but
+  cannot be compared against the guest yet, because the row-to-row half --
+  XOR against the previous row, and the repeat counter at `-$152(a6)` -- lives
+  in `fn_21_59e2` and is not modelled. Finishing that model is the way to get
+  ground truth for which row first disagrees.
+
+  The card being drawn is the right one: after the open, `a5-0x9d2` goes
+  `0xed5` (card 3797, the intro) then `0xafa` (**card 2810, the Table of
+  Contents**), so the catalogue's own `on openCard / go to card "theContents"`
+  runs and navigates. The 14 KB `BMAP 4202` is that card's.
+
+  What is left is the opcode handling in `fn_21_59e2` itself
 - **A script error still fires**, now `Can't understand what's after "pass"`
   (`DLOG 1684`, `STR# 1002`) plus an `ALRT 3003` "Unexpected error 673082".
   The catalogue's script uses `pass doMenu` and `pass idle`. The dialog draws
