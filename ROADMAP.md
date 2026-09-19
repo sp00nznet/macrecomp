@@ -426,10 +426,34 @@ Two HAL faults were behind it, both general rather than HyperCard-specific:
 
 **What is still wrong, in the order it matters:**
 
-- **The card stops at row 53 of 342.** The blit source (`a5-0x1318` =
-  0x84932c) holds 7,707 lit pixels across rows 0-52 and nothing below. This is
-  the oldest open bug in this file and it is now the thing between "some of the
-  catalogue is on screen" and "the catalogue is on screen".
+- **The card stops at row 53 of 342, and the mechanism is now known.** The
+  blit source (`a5-0x1318` = 0x84932c) holds 7,707 lit pixels across rows 0-52
+  and nothing below. Both of the catalogue's `BMAP` blocks are read in full --
+  `req=14368 got=14368` and `req=7456 got=7456`, matching their block sizes
+  exactly -- so the data is all there and the decoder is what stops.
+
+  `fn_21_59e2` is the WOBA driver. Its row loop ends at `0x5d50`:
+  `moveq #$40,d0` (rowBytes 64, correct), advance the destination, `row++`,
+  loop while `row <= -$184(a6)`. Each row begins at `0x5afe` with
+
+      move.b -$181(a6), d0
+      bne.w  $5d0c              ; flag set -> skip this row entirely
+
+  and `-$181(a6)` is cleared **once, before the loop** (`0x5aea`) and set to 1
+  at `0x5c9a` and `0x5cd2` -- never cleared inside it. So the first row that
+  sets it silences every row after.
+
+  It is set right after `jt 0x1b2a`, which both sites call first and which
+  looks like the decoder's abort. The second site reaches it from an explicit
+  consistency check at `0x5cc4`: decode a row, then
+  `move.l -$26(a6),d0; sub.l a4,d0; cmp.l -$12(a6),d0; beq $5cda` -- the bytes
+  produced must equal the expected row length, or the decode is abandoned.
+
+  So one WOBA opcode is decoding to the wrong byte count at row 53, and
+  because the flag is never reset that one bad row costs the other 289. The
+  opcode handlers to check are `jt 0x1992`, `jt 0x199a`, `jt 0x19ea` and
+  `jt 0x19f2`, dispatched on the `$80`/`$a0`/`$c0` ranges around `0x5b44`.
+
 - **A script error still fires**, now `Can't understand what's after "pass"`
   (`DLOG 1684`, `STR# 1002`) plus an `ALRT 3003` "Unexpected error 673082".
   The catalogue's script uses `pass doMenu` and `pass idle`. The dialog draws
