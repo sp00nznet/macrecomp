@@ -503,6 +503,25 @@ written by `fn_9_3794` (2 and 4), `fn_9_4068` (6 and 7), `fn_14_11d4` and
 the 6s, so `else` itself is **not** failing. Whatever records the `pass` error
 is elsewhere again.
 
+**What the call chain does say.** With `MRPARSE=1`, the post-click error's
+chain is
+
+    514e54 590aa0 593306 593358 5e0e58 5e21c4 5e2928 5e298e 593f1e 593ef0 ...
+
+innermost first -- so `fn_14_0e58` *is* the caller of the reporter after all,
+and the earlier note calling it "not the reporter" was measuring the wrong
+thing: its argument at entry, over a sample that missed the failing call.
+
+It fires only when the parse position `a5-0x5524` holds `0x8001` and
+`jt 0xa8a` agrees, and then reports `a5-0x4ac8` as `^0`. `0x8001` reads like a
+sentinel -- bit 15 set, index 1 -- for *no token left*, which would make the
+failure "the parser consumed `pass` and found nothing after it", even though
+`pass idle` plainly has a word after it.
+
+So the next check is whether the tokeniser emits the message name following
+`pass` at all -- count the tokens the line produces against `a5-0x576a` --
+rather than chasing who writes `0x8001`.
+
 
 
 
