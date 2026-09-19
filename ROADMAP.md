@@ -132,6 +132,36 @@ cannot open a stack yet. The run then sits in `ModalDialog` waiting for an
 event that a headless harness never sends, which is correct behaviour rather
 than a hang.
 
+### Computed-jump entry points (`tools/find_entries.py`)
+
+A `jmp d(pc,Dn.w)` -- `0x4EFB` -- is a switch: an extension word, a table of
+16-bit offsets, then the arms. **Nothing in the binary names those arms**, so a
+linear decode only lands on one by luck, and a target it missed becomes an
+`m68k_entry_miss` at run time: the function returns without doing anything, in
+silence. One such address in `CODE 12` was the entire reason HyperTalk did not
+execute.
+
+`find_entries.py` reads every table, checks each target against the generated
+code, and prints the ones with neither a `case` label nor a registered function
+start -- exactly what to hand back as `--entry`. Re-run it after each lift
+until it reports nothing: fixing one set shifts the boundaries and can expose
+another. For this binary it converges in two rounds at **30 addresses**:
+
+| segment | `--entry` |
+|---|---|
+| CODE 1 | `0x2200,0x2240,0x22d6,0x2416,0x241c,0x3ff0,0x4000,0x4038,0x403c` |
+| CODE 4 | `0x4a2,0x4ac,0x4c0,0x4d2,0x4dc,0x4f6,0x50e` |
+| CODE 6 | `0x4b12` |
+| CODE 9 | `0x1bc0,0x2720` |
+| CODE 10 | `0x1360,0x17ec,0x35f6,0x4de2` |
+| CODE 12 | `0x1322,0x263a,0x2f5c` |
+| CODE 13 | `0xc32,0x446c,0x45b6,0x47a0,0x4c14` |
+| CODE 16 | `0x2ca6,0x4bc8` |
+| CODE 21 | `0x1d4,0x3f18` |
+
+Dropped deliberately: an entry that points backwards, outside the segment, or
+at an odd address means the table has ended and the arms have begun.
+
 ### Instruments kept
 
 `MRMAXCALLS=<n>` stops after n transfers and prints the shadow stack; `MRSTACK=1`

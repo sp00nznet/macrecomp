@@ -81,7 +81,7 @@ it: the **trap set** from ③ is exactly the Toolbox surface you must implement.
 | `unprotect.py` | statically unpack self-decrypting/protected CODE | ✅ **fully solved** (jump table + segment bodies, byte-exact) |
 | `relocs.py` | read THINK C far-model `CREL`/`DREL` relocations; mark which longwords in a segment are data addresses | 🟢 CREL confirmed against string starts; DREL in-range only |
 | `ghidra/EmuDecrypt.java` | run an isolated decrypt routine in Ghidra's p-code emulator (the oracle for cracking an unknown cipher) | ✅ |
-| `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); every instruction is an entry point, so computed jumps into a function resolve; rejects function starts that are provably not code; `--entry 0x...` adds a boundary the decode cannot find on its own, which a *computed* entry never is -- HyperCard needs `--entry 0x1322` on `CODE 12` | ✅ **97–100% instruction coverage** |
+| `lift68k.py` | mechanical 68k → C lifter (per-function; branches→goto; traps→HAL); every instruction is an entry point, so computed jumps into a function resolve; rejects function starts that are provably not code; `--entry 0x...` adds a boundary the decode cannot find on its own, which a *computed* entry never is -- `tools/find_entries.py` finds the addresses to pass -- see ROADMAP | ✅ **97–100% instruction coverage** |
 | `conformance.py` | extract → scan → coverage over the corpus; one row per title, fails on a drop below baseline | ✅ in CI |
 | `extract_resources.py --forks` | every file's data + resource forks, plus `files.json` — what the File Manager HAL serves | ✅ |
 | runtime `m68k.{h,c}`: CPU state + big-endian memory + faithful CCR flags + function table/dispatch | the execution substrate | ✅ |
