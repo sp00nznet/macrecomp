@@ -325,10 +325,28 @@ concluded it was already there.
 dump address might not have been the live record. The retraction was wrong.
 The call count for `fn_21_1e1e` settles it without depending on any dump.)
 
-**Next: `jt 0x1452`**, which `fn_12_11c2`'s arm 4 calls at `0x123e` as
-`jt 0x1452(record, 0x5c, 2)` to fill that record. That is where the name from
-the script's string literal should be written, and it is the last unexamined
-step.
+**How the record is built, for whoever picks this up.** `fn_12_11c2`'s arm 4
+calls `jt 0x1452` = `fn_14_1620` as `(record, 0x5c, 2)`. That function pops
+HyperCard's parse stack, which is three parallel arrays indexed by a position
+held in `a5-0x4684`:
+
+| array | holds |
+|---|---|
+| `a5-0x4704` | the element's **type byte** (what `fn_9_01a4` = `jt 0x8f2` reads back) |
+| `a5-0x4904` | a **length**, as a longword |
+| `a5-0x4984` | a second byte, set to `0x19` on pop |
+
+The data itself lives in a pool. `fn_14_1620` subtracts the popped length from
+the offset in `a5-0x4988`, forms `*(a5-0x4990) + (a5-0x4988)`, and copies from
+there into the caller's record. At the `go` command the top element's length
+reads `0x5c` -- 92 bytes, exactly the record size -- so the parser builds the
+whole destination descriptor on that pool and this pops it off.
+
+So the empty stack name is written by whatever parses `stack "Whole Earth"`
+into that 92-byte descriptor, and that is where to look next. The pool is
+reused between parses, so it has to be read at the right moment rather than
+sampled at a fixed address -- the mistake this file has already recorded
+twice.
 
 **Where the `go` gives up, named.** `fn_21_0fcc` reaches its general arm at
 `0x10e2` and calls `fn_21_04a6` -- the destination resolver -- at `0x1102`;
