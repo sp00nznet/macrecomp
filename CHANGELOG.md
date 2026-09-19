@@ -8,6 +8,16 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **`ScreenRow` (low memory 0x106) was never set.** It is how a title steps
+  from one screen row to the next when it blits with its own code instead of
+  going through `CopyBits`. Left at zero, `mulu.w` against it makes every row
+  offset zero, so every row lands on the first one and the picture never
+  appears. HyperCard's card blitter (`fn_18_1f16`, 3582 calls a run) does
+  exactly that.
+
+  **With it set, HyperCard's card window is on screen** -- desktop pattern,
+  card area, border and drop shadow -- where before the framebuffer was blank.
+  `ScrVRes`, `ScrHRes` and `MBarHeight` are set alongside it.
 - **Every Pascal Boolean trap was returning false.** A Boolean result occupies
   the 2-byte result slot but is read as a *byte at the slot's address*: compiled
   code does `move.b (a7)+,d0`, which on a big-endian machine takes the **high**

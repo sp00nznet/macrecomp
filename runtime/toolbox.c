@@ -324,6 +324,10 @@ static uint32_t g_rand = 0x12345678u;    /* Random(): deterministic by design */
 #define LM_ROM85     0x028E
 #define LM_ROMBASE   0x02AE
 #define LM_SCRNBASE  0x0824
+#define LM_SCREENROW 0x0106   /* bytes per screen row */
+#define LM_SCRVRES   0x0102
+#define LM_SCRHRES   0x0104
+#define LM_MBARHEIGHT 0x0BAA
 #define LM_CURRENTA5 0x0904
 
 static void lowmem_init(void){
@@ -333,6 +337,14 @@ static void lowmem_init(void){
     m68k_w16(rom + 8, 0x0276);               /* ROM version word: Mac SE */
     m68k_w32(LM_MEMTOP, M.memsize);
     m68k_w32(LM_SCRNBASE, screen_base());
+    /* ScreenRow is how a title steps from one screen row to the next when it
+     * blits with its own code rather than through CopyBits. Left at zero it
+     * multiplies every row offset by nothing, so every row lands on the first
+     * one and the picture never appears -- which is exactly what HyperCard's
+     * card blitter was doing. */
+    m68k_w16(LM_SCREENROW, QD_W/8);
+    m68k_w16(LM_SCRVRES, 72); m68k_w16(LM_SCRHRES, 72);
+    m68k_w16(LM_MBARHEIGHT, 20);
     m68k_w32(LM_TICKS, 0);
     m68k_w32(LM_CURRENTA5, M.a[5]);
 }
