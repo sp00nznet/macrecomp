@@ -6,6 +6,36 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The HyperTalk parse error is gone.** `Can't understand what's after "end"`
+  was never about the script: the lifter's linear decode drifted through a table
+  of data embedded in `fn_17_0ec6`, and because 68k instructions are
+  variable-length it came out the other side one byte off. A branch back into
+  the real code then landed on an address the decode had never produced, so the
+  lifted function had no label for it and left **without running its
+  `movem.l (a7)+,d3-d7/a2` epilogue** -- handing its caller a corrupted card
+  index and, further along, a parser working on corrupted state.
+
+  A branch target *is* an instruction boundary, so no instruction may span one.
+  The decode now re-synchronises: the bytes up to the target are recorded as
+  data and decoding resumes there, repeated until the target set stops growing.
+  Only even targets count -- 68k instructions are word-aligned, so an odd one
+  came from a decode that had already drifted, and splitting there would
+  manufacture instructions that cannot exist.
+
+  HyperCard 1.2.2 on the unmodified Home stack went from stopping at 2450
+  Toolbox calls with a parse error to **running clean with no errors at all**.
+  `go to next card` also stopped failing (`Unexpected error 836587`).
+
+- `MRWATCH` now also reports a callee that fails to preserve D3-D7 or A2-A4.
+  Mac Pascal preserves them across a call, so a lifted function that returns
+  with one altered has corrupted a value its caller still holds -- which shows
+  up later as a wrong index with nothing to connect it to the callee that did
+  it. That check is what found the drift. It has false positives on
+  register-convention leaf helpers (no `link`, no `movem`), which is why it is
+  a diagnostic rather than an assertion.
+
 ### Added
 
 - **A window.** `runtime/platform_sdl.c` was written but never linked: it

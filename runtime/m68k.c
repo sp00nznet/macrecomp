@@ -332,12 +332,29 @@ void m68k_call(uint32_t addr) {
                              SP, M.memsize, addr, g_last_call, g_prev_call);
     }
     volatile uint32_t a6_in = M.a[6], sp_in = SP;
+    /* MRWATCH also checks the callee-saved registers. Mac Pascal preserves
+     * D3-D7 and A2-A4 across a call; a lifted function that returns with one of
+     * them altered has silently corrupted a value its caller is still holding,
+     * and the damage shows up later as a wrong index or a stray pointer with
+     * nothing to connect it to the callee that did it. */
+    uint32_t sav[8];
+    if (g_watch_a6) { for (int i = 0; i < 5; i++) sav[i] = M.d[3+i];
+                      for (int i = 0; i < 3; i++) sav[5+i] = M.a[2+i]; }
     if(setjmp(g_unwind[mydepth]) == 0) fn(entry);
     else unwound = 1;                 /* a deeper frame exited non-locally */
     if (g_watch_a6 && SP >= M.memsize && sp_in < M.memsize) {
         static int said2 = 0;
         if (!said2++) fprintf(stderr, "m68k: %06x left SP at %08x (was %08x) -- "
                                       "outside the address space\n", addr, SP, sp_in);
+    }
+    if (g_watch_a6) {
+        static const char *nm[8] = {"d3","d4","d5","d6","d7","a2","a3","a4"};
+        for (int i = 0; i < 8; i++) {
+            uint32_t now = i < 5 ? M.d[3+i] : M.a[2+(i-5)];
+            if (now == sav[i]) continue;
+            fprintf(stderr, "m68k: %06x did not preserve %s (%08x -> %08x)\n",
+                    addr, nm[i], sav[i], now);
+        }
     }
     if (g_watch_a6 && M.a[6] != a6_in)
         fprintf(stderr, "m68k: %06x returned with A6 %06x -> %06x (entry %06x, SP %06x -> %06x)\n",

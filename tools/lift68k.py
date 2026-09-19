@@ -523,14 +523,28 @@ def disasm_one(code, pc):
     return None
 
 
-def lift_function(code, seg, start, end):
-    # cursor pass: build a stream of ('ins',insn) / ('trapdata',addr,bytes) /
-    # ('dispatch',addr,entries,table_end), skipping inline dispatch tables.
+def decode_stream(code, start, end, resync):
+    """Linear decode of [start,end), re-synchronised at known branch targets.
+
+    A function with a table of data in the middle of it drifts: the decode
+    swallows the table as instructions, and because 68k instructions are
+    variable length it can come out of the other side one byte off. Every
+    boundary after that is wrong, and -- worse -- a branch back into the real
+    code lands on an address the decode never produced, so the lifted function
+    has no label for it and leaves without running its epilogue. That is how
+    fn_17_0ec6 was returning without restoring d3-d7/a2 and handing its caller a
+    corrupted card index. A branch target *is* an instruction boundary, so no
+    instruction may span one: when that happens the bytes up to the target are
+    recorded as data and the decode resumes there."""
     stream=[]; pc=start
     while pc<end:
         ins=disasm_one(code,pc)
         if ins is None or ins.address!=pc:
             stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2; continue
+        split=[t for t in resync if pc < t < pc+ins.size]
+        if split:
+            t=min(split)
+            stream.append(("trapdata",pc,bytes(code[pc:t]))); pc=t; continue
         da=dispatch_kind(ins)
         if da is not None:
             d=read_dispatch(code, pc+ins.size, da)
@@ -551,6 +565,33 @@ def lift_function(code, seg, start, end):
         if ins.mnemonic.split(".")[0] in ("jmp","bra","rts","rte","rtr"):
             while pc+1 < end and code[pc]==0 and code[pc+1]==0:
                 stream.append(("trapdata",pc,bytes(code[pc:pc+2]))); pc+=2
+
+    return stream
+
+def _targets_of(stream):
+    t=set(); saved=dict(STAT)
+    for it in stream:
+        if it[0]=="ins": emit(it[1],t)
+        elif it[0]=="dispatch":
+            for _,h in it[2]: t.add(h)
+            if it[4] is not None: t.add(it[4])
+    STAT.clear(); STAT.update(saved)
+    return t
+
+def lift_function(code, seg, start, end):
+    # Decode, collect the branch targets it found, and decode again forcing
+    # those to be boundaries. Targets found by a drifted decode can themselves
+    # be wrong, so repeat until the set stops growing -- it converges in one or
+    # two rounds and is capped regardless.
+    resync=set(); stream=decode_stream(code,start,end,resync)
+    for _ in range(3):
+        # Only even targets: 68k instructions are word-aligned, so an odd
+        # "target" came out of a decode that had already drifted. Splitting
+        # there would manufacture odd-aligned instructions that cannot exist.
+        found={t for t in _targets_of(stream) if start < t < end and not (t & 1)}
+        if found <= resync: break
+        resync |= found
+        stream=decode_stream(code,start,end,resync)
 
     # collect branch targets (emit side-effects) without disturbing coverage stats
     targets=set(); saved=dict(STAT)

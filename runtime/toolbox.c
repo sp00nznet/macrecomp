@@ -583,7 +583,11 @@ void m68k_trap(uint16_t raw){
     case 0xA892: /*Line*/   { int16_t dv=pop16(),dh=pop16(); qd_line(dh,dv); } break;
     case 0xA8A1: /*FrameRect*/ { Rect r=rd_rect(pop32()); qd_frame_rect(&r); } break;
     case 0xA8A2: /*PaintRect*/ { Rect r=rd_rect(pop32()); qd_paint_rect(&r); } break;
-    case 0xA8A3: /*EraseRect*/ { Rect r=rd_rect(pop32()); qd_erase_rect(&r); } break;
+    case 0xA8A3: /*EraseRect*/ { if(getenv("MRGFX")){ Rect _c; qd_get_clip(&_c);
+            uint32_t _rp=m68k_r32(SP); Rect _r=rd_rect(_rp);
+            fprintf(stderr,"[gfx] EraseRect %d,%d,%d,%d clip %d,%d,%d,%d base %06x\n",
+                _r.top,_r.left,_r.bottom,_r.right,_c.top,_c.left,_c.bottom,_c.right,
+                (unsigned)(g_cur_port?m68k_r32(g_cur_port+2):0)); } Rect r=rd_rect(pop32()); qd_erase_rect(&r); } break;
     case 0xA8A4: /*InverRect*/ { Rect r=rd_rect(pop32()); qd_invert_rect(&r); } break;
     case 0xA8A5: /*FillRect*/  { (void)pop32(); Rect r=rd_rect(pop32()); qd_fill_rect(&r,1); } break;
     case 0xA8B6: /*FrameOval*/ { Rect r=rd_rect(pop32()); qd_frame_oval(&r); } break;
