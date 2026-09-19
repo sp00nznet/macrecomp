@@ -127,6 +127,13 @@ uint32_t g_watch_addr = MR_WATCH_OFF;
 void mr_watch_hit(uint32_t addr, uint32_t val){
     fprintf(stderr, "[watch] %06x byte %02x, long now %08x  in %06x (from %06x)\n",
             addr, (unsigned)(val & 0xFFu), m68k_r32(addr), g_last_call, g_prev_call);
+    /* The registers the store was built from. "Who wrote this" is only half
+     * the answer when the value came out of a register loaded elsewhere. */
+    if (getenv("MRWATCHREGS")){
+        fprintf(stderr, "        a2=%06x a3=%06x a4=%06x a6=%06x sp=%06x\n",
+                M.a[2], M.a[3], M.a[4], M.a[6], SP);
+        for (int i = 0; i < g_shadow_sp && i < 40; i++)
+            fprintf(stderr, "        [%d] %06x\n", i, g_shadow[i]); }
 }
 
 volatile uint32_t g_last_call = 0, g_prev_call = 0;  /* watchdog: last two fns entered */
@@ -280,6 +287,16 @@ void m68k_find_probe(const char *tag){
 
 void m68k_call(uint32_t addr) {
     if (IS_SENTINEL(addr)) { unwind_to(SENTINEL_DEPTH(addr)); return; }
+    /* MRODD=1: catch the first moment the stack or frame pointer goes odd.
+     * A 68000 stack is always even; once it is not, every later frame is one
+     * byte out and the values read back are garbage that looks plausible. */
+    { static int on = -1; static int fired;
+      if (on < 0) on = getenv("MRODD") != 0;
+      if (on && !fired && ((SP & 1) || (M.a[6] & 1))) {
+          fired = 1;
+          fprintf(stderr, "[odd] entering %06x with sp=%06x a6=%06x\n", addr, SP, M.a[6]);
+          for (int i = 0; i < g_shadow_sp && i < 40; i++)
+              fprintf(stderr, "      [%d] %06x\n", i, g_shadow[i]); } }
     if (g_watch_a6 < 0) g_watch_a6 = getenv("MRWATCH") != 0;
     if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
     if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
@@ -324,8 +341,21 @@ void m68k_call(uint32_t addr) {
          * wrong place cannot be found from register values alone -- what you
          * need is the cursor's offset within the source it is reading. */
         m68k_find_probe("brk");
+        /* MRSTACK: the whole shadow stack at the breakpoint. A bad argument
+         * is made somewhere above the frame that passes it on. */
+        if (getenv("MRSTACK"))
+            for (int i = 0; i < g_shadow_sp && i < 40; i++)
+                fprintf(stderr, "      [%d] %06x\n", i, g_shadow[i]);
         fprintf(stderr, "[brk %06x] args:", addr);
         for (int i = 0; i < 8; i++) fprintf(stderr, " %08x", m68k_r32(SP + 4u*i));
+        /* And the same bytes as text. Pascal passes short strings by value,
+         * so the argument you want is often *in* the frame, not behind a
+         * pointer, and hex hides it. */
+        fprintf(stderr, "  |");
+        for (uint32_t i = 0; i < 48 && SP + i < M.memsize; i++){
+            unsigned char c = M.mem[SP + i];
+            fputc(c >= 32 && c < 127 ? c : 46, stderr); }
+        fprintf(stderr, "|");
         fprintf(stderr, "\n");
         /* An argument that points at text is usually the interesting one: print
          * it, and one level of indirection too, since a handle looks the same. */

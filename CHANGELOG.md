@@ -44,6 +44,15 @@ All notable changes to this project are documented here. Format follows
 - `MRBRKFIND=<text>` finds that text in guest memory and reports every register
   and A5 global pointing into it, plus the text itself.
 - `MRDLG=1` prints what a dialog actually says.
+- `MRODD=1` reports the first moment SP or A6 goes odd. A 68000 stack is always
+  even; once it is not, every later frame is a byte out and reads back garbage
+  that looks plausible.
+- `MRSTACK` now also applies at an `MRBRK` breakpoint, and `MRBRK` prints the
+  frame as text as well as hex -- Pascal passes short strings by value, so the
+  argument you want is often *in* the frame rather than behind a pointer.
+- `MRWATCHREGS=1` adds the registers and the call chain to each `MRWATCHADDR`
+  hit; "who wrote this" is half an answer when the value came from a register
+  loaded somewhere else.
 
 ### Investigated
 
@@ -55,10 +64,18 @@ All notable changes to this project are documented here. Format follows
   argument parser reached through the A5 table at `a5-0x31be`, entry 3.
 
   `fn_10_0a8c` enforces HyperCard's real rule: the word after `pass` must name
-  the enclosing handler. It takes that name from `*(a5-0x57f0)`. At the
-  failure that record's name field points at `0x77f972`, which is **all
-  zeros** -- an empty name, so nothing matches and `fn_9_3306` raises STR# 1002
-  item 53, `Can't understand what's after "^0"`.
+  the enclosing handler. It takes that name from `*(a5-0x57f0)`, HyperCard's
+  "current handler" pointer, and at the failure that pointer holds **0x3efa4f
+  -- an odd address**. A 68000 bus-errors reading a longword there, so the
+  descriptor it yields is meaningless; `getName` (CODE 9 `0x1248`) then returns
+  a Pascal string of length `0xff` full of zeros instead of `idle`, the
+  comparison against the live token (which *is* a correct `idle` on the
+  stack) fails, and `fn_9_3306` raises STR# 1002 item 53.
+
+  The bad pointer is written by `fn_14_21c4` as `lea -$54(a3),a0`, with `a3`
+  = its argument = a caller's frame pointer, arriving as 0x3efaa3. The string
+  pool it all resolves against is fine: `a5-0x2bb0` is WTLK 4, and the bytes
+  in memory at the offsets used match the resource exactly.
 
   Ruled out along the way, each by reading the emitted C against the 68000
   manual: `moveq` sign-extension, the A7 byte-size `-(a7)`/`(a7)+` special
@@ -66,9 +83,13 @@ All notable changes to this project are documented here. Format follows
   that one is *correctly* zero, because all 75 registrations in `fn_3_1378`
   push `clr.l` for it.
 
-  Still open: which of the four writers of `a5-0x57f0` (CODE 12 `0x0ebe` sets
-  the sentinel; CODE 14 `0x1b7c`, `0x1ea0`, `0x2354`, `0x27cc` set real
-  records) leaves the name empty.
+  Still open: where the odd frame pointer is made. It is not a misaligned
+  stack -- `MRODD` watches SP and A6 at every call entry for a whole run and
+  never fires -- and it is not an odd argument into `fn_14_21c4`, which
+  `MRBRK`+`MRSTACK` also rule out. The chain that carries it is
+  `fn_9_3f1e -> fn_14_298e -> fn_14_2928 -> fn_14_21c4`, and `fn_14_298e`
+  passes its own `a6` by value (`move.l a6,-(a7)`), so the next step is a
+  step-level trace of that frame rather than another breakpoint.
 
 ### Fixed
 
