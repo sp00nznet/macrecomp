@@ -299,24 +299,36 @@ destination with `jt 0x8f2`, and dispatches:
 | 4 | `0x1232` | `jt 0x1452` over the whole record |
 | else | `0x1242` | straight to the navigator with the record as-is |
 
-**Which arm a click takes is not settled.** `jt 0x146a` (arm 1's call) goes
-from 1 to 2 with a click, which suggested arm 1 -- but the classifier
-`jt 0x8f2` is `fn_9_01a4`, and all it does is return
-`(a5-0x4704)[(a5-0x4684) - 1]`: a byte out of a type array indexed by a parse
-position. Dumped at the command's entry (`MRBRK=5c11be MRBRKA5=-18052
-MRBRKMEM=3FB8FC:4`) the index reads 1 and the array reads `04 03 9c 9c 9c`,
-so the classifier returns **4** and arm 4 is taken -- which fills the record
-through `jt 0x1452` with a type byte of 2, i.e. *stack*, matching
-`fn_21_04a6`'s stack arm at `0x83a`. A single +1 on a call that other code
-also makes is not evidence; the array read is.
+**The destination record carries no stack name, and this time the evidence is
+behavioural.** `fn_21_04a6` opens the destination stack at `0x055c`
+(`jsr $1e1e(pc)`), and it only gets there when `d4` is non-zero at `0x0520`.
+`d4` is the inverse of `fn_21_3978`, "is this the stack we are already in".
+Measured: **`fn_21_1e1e` is entered twice a run with a click and twice
+without** -- the stack open is never reached. So `d4` is zero, so
+`fn_21_3978` answered *yes, same stack*.
 
-If the kind really is 2, then the stack arm does run and its first
-instruction, `move.b d4,d0; bne.w $a88`, is the thing to check: d4 is the
-inverse of `fn_21_3978`, which asks "is this the stack we are already in" by
-comparing the destination name against `a5-0x9fe`. A wrong answer there would
-send the `go` straight past all of the stack handling to `0xa88`, silently,
-which is what is observed. That is the next thing to measure, and it should
-be measured by reading d4, not by counting calls.
+It cannot have answered that by comparing names. `a5-0x9fe`, the name it
+compares against, reads `Home`; the destination is `Whole Earth`; the
+compare would fail. The only other way out with the default answer of 1 is
+the first test in the function:
+
+    399a  move.b -$100(a6), d0    ; the destination name's length byte
+    399e  tst.w  d0
+    39a0  beq.w  $3ab6            ; length 0 -> return "same stack"
+
+So the name length is zero. The record reaching the navigator has no stack
+name in it, which is why the stack is never opened, no file is touched and
+nothing is reported: HyperCard was asked to go to a stack with no name, and
+concluded it was already there.
+
+(An earlier note here said this, then retracted it on the grounds that the
+dump address might not have been the live record. The retraction was wrong.
+The call count for `fn_21_1e1e` settles it without depending on any dump.)
+
+**Next: `jt 0x1452`**, which `fn_12_11c2`'s arm 4 calls at `0x123e` as
+`jt 0x1452(record, 0x5c, 2)` to fill that record. That is where the name from
+the script's string literal should be written, and it is the last unexamined
+step.
 
 **Where the `go` gives up, named.** `fn_21_0fcc` reaches its general arm at
 `0x10e2` and calls `fn_21_04a6` -- the destination resolver -- at `0x1102`;
