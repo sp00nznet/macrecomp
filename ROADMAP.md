@@ -449,10 +449,35 @@ Two HAL faults were behind it, both general rather than HyperCard-specific:
   `move.l -$26(a6),d0; sub.l a4,d0; cmp.l -$12(a6),d0; beq $5cda` -- the bytes
   produced must equal the expected row length, or the decode is abandoned.
 
-  So one WOBA opcode is decoding to the wrong byte count at row 53, and
-  because the flag is never reset that one bad row costs the other 289. The
-  opcode handlers to check are `jt 0x1992`, `jt 0x199a`, `jt 0x19ea` and
-  `jt 0x19f2`, dispatched on the `$80`/`$a0`/`$c0` ranges around `0x5b44`.
+  The row decoder itself is `jt 0x1cc2` = `fn_18_1e00`. Its loop is
+
+      1e18  move.b (a0)+, d0            ; opcode
+      1e1a  bmi.w  $1ed6                ; >= 0x80
+      1e1e  move.b $1e2a(pc, d0.w), d1  ; byte table -> copy count
+      1e22  and.w  d2, d0               ; d0 &= 0x0f
+      1e24  adda.w d0, a1               ; skip that many
+      1e26  jmp    $1e2a(pc, d1.w)      ; into the unrolled copy chain
+      ...
+      1eb8  cmpa.l a2, a1               ; a2 = row start + row width
+      1eba  bcs.w  $1e18                ; a1 < a2 -> next opcode
+
+  so the row ends when `a1` reaches `a2`, and overshooting it is exactly the
+  mismatch the caller rejects.
+
+  **Checked and correct, so none of this needs redoing:** the eight targets of
+  the byte table at `0x1e2a` are all decoded boundaries (note it is a *byte*
+  table -- `find_entries.py` only reads 16-bit ones, so it cannot see this
+  shape); `cmpa.l a2,a1` lifts to `fl_cmp(a2, a1, a1-a2, 4)`, the right operand
+  order, and `fl_sub`'s carry is the standard borrow, so `bcs` means `a1 < a2`
+  as it should; `lsl.b #3, d0` on the `>= 0xe0` arm masks to a byte
+  (`m68k_lsl` ANDs with the size mask) and `SET_DB` leaves the upper bits
+  alone, which `moveq #0,d0` had cleared -- so `adda.w d0,a1` advances by the
+  right amount; and the copy primitives' Duff's-device jump (`4efb 1002` at
+  `seg17+0x10aa`) lands on decoded boundaries too.
+
+  What is left is the opcode handling in `fn_21_59e2` itself -- the `0x80` to
+  `0xbf` arms and the repeat counter at `-$152(a6)` -- and the possibility that
+  the shared source pointer `-$32(a6)` is advanced wrongly by one of them.
 
 - **A script error still fires**, now `Can't understand what's after "pass"`
   (`DLOG 1684`, `STR# 1002`) plus an `ALRT 3003` "Unexpected error 673082".
