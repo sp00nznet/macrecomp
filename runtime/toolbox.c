@@ -232,23 +232,49 @@ static void rgn_put(uint32_t h, const Rect *r){
 /* ---- handle sizes ----
  * The bump heap never frees, so a handle's size is simply recorded next to it.
  * ponytail: linear scan. Swap for a hash if a title allocates thousands. */
-static struct { uint32_t h, size; } g_hsz[4096];
-static int g_nhsz;
+/* Open-addressed, grows on demand. This was a fixed 4096 entries searched
+ * linearly, which fails twice over on a real title: HyperCard allocates far
+ * more handles than that, so the table filled and every handle after it
+ * reported size 0 -- SetHandleSize took its "unknown" path, HandToHand copied
+ * nothing and GetHandleSize lied, all silently and all only once a run had been
+ * going a while. The linear scan was also O(n) on a trap called constantly.
+ * Entries are never removed: the heap below never frees, so an address is never
+ * reused. */
+typedef struct { uint32_t h, size; } HSz;
+static HSz *g_hsz;
+static uint32_t g_hsz_cap, g_hsz_n;
+static uint32_t hsz_slot(uint32_t h){          /* index of h, or of a free slot */
+    uint32_t m = g_hsz_cap - 1, i = (h * 2654435761u) & m;
+    while(g_hsz[i].h && g_hsz[i].h != h) i = (i + 1) & m;
+    return i;
+}
+static void hsz_grow(void){
+    uint32_t ncap = g_hsz_cap ? g_hsz_cap * 2 : 8192;
+    void *nt = calloc(ncap, sizeof *g_hsz);
+    if(!nt) return;                            /* keep the old table rather than lose it */
+    HSz *old = g_hsz; uint32_t ocap = g_hsz_cap;
+    g_hsz = nt; g_hsz_cap = ncap;
+    for(uint32_t i=0;i<ocap;i++) if(old[i].h) g_hsz[hsz_slot(old[i].h)] = old[i];
+    free(old);
+}
 static void hsz_set(uint32_t h, uint32_t sz){
-    for(int i=0;i<g_nhsz;i++) if(g_hsz[i].h==h){ g_hsz[i].size=sz; return; }
-    if(g_nhsz<(int)(sizeof g_hsz/sizeof *g_hsz)){ g_hsz[g_nhsz].h=h; g_hsz[g_nhsz++].size=sz; }
-    else { static int said=0; if(!said++) fprintf(stderr,"m68k: handle size table full at %d; "
-        "sizes for later handles are lost\n", g_nhsz); }
+    if(!h) return;
+    if(g_hsz_n * 10 >= g_hsz_cap * 7) hsz_grow();
+    if(!g_hsz_cap) return;
+    uint32_t i = hsz_slot(h);
+    if(!g_hsz[i].h){ g_hsz[i].h = h; g_hsz_n++; }
+    g_hsz[i].size = sz;
 }
 static uint32_t hsz_get(uint32_t h){
-    for(int i=0;i<g_nhsz;i++) if(g_hsz[i].h==h) return g_hsz[i].size;
-    return 0;
+    if(!h || !g_hsz_cap) return 0;
+    uint32_t i = hsz_slot(h);
+    return g_hsz[i].h == h ? g_hsz[i].size : 0;
 }
 /* Zero is a real size, so "not in the table" has to be asked separately --
  * otherwise an unrecorded handle looks empty and gets treated as one. */
 static int hsz_known(uint32_t h){
-    for(int i=0;i<g_nhsz;i++) if(g_hsz[i].h==h) return 1;
-    return 0;
+    if(!h || !g_hsz_cap) return 0;
+    return g_hsz[hsz_slot(h)].h == h;
 }
 
 /* ---- dialogs ---- */

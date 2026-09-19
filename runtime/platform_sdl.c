@@ -66,7 +66,7 @@ static void bmshot(void){
      * screen" and "nothing was drawn anywhere" look identical from the
      * framebuffer; this tells them apart without guessing a buffer address. */
     if(!strcmp(spec, "scan")){
-        static int done; if(done++) return;
+        static int n; if(++n != 400) return;   /* late enough to see the end state */
         struct { unsigned base, bits; } top[8] = {{0,0}};
         for(unsigned a = 0x800000u; a + 4096 < M.memsize && a < 0x1000000u; a += 4096){
             unsigned bits = 0;

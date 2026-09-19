@@ -72,6 +72,13 @@ All notable changes to this project are documented here. Format follows
   `SelectWindow`, `InvalRect`, `InvalRgn` and a new window now queue one, and it
   is delivered once per exposure -- cleared on delivery rather than on
   `BeginUpdate`, so a title that never calls `BeginUpdate` cannot spin on it.
+- **The handle-size table was a fixed 4096 entries and silently overflowed.**
+  Past that, every new handle reported size 0: `SetHandleSize` took its
+  "unknown" path, `HandToHand` and `HandAndHand` copied nothing, and
+  `GetHandleSize` lied -- all silently, and all only once a run had been going
+  a while, which is the worst possible shape for a bug. HyperCard allocates far
+  more handles than that. It is now an open-addressed hash that grows on
+  demand, which also drops a linear scan from a trap called constantly.
 - **Update events are now delivered per window.** A title can have several
   windows open and paints each from its own update event; tracking only "the
   front one" meant just one of HyperCard's five was ever told to repaint.
