@@ -5,6 +5,7 @@
 #include "macrecomp/m68k.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <setjmp.h>
 
 M68K M;
 
@@ -141,9 +142,32 @@ static void bump_ticks(void){
  * by popping the caller's return address and `jmp (aX)`-ing to it (also removing
  * their parameters); they hit this sentinel, which unwinds back to C. C-style
  * functions return via RTS and never touch it, so we discard it ourselves. */
-#define RET_SENTINEL 0xCAFE0000u
-
 volatile uint32_t g_shadow[512]; volatile int g_shadow_sp = 0;   /* shadow call stack */
+
+/* The fake return address carries the call depth that pushed it, so a return
+ * can be told from a non-local exit. Compiled Pascal does the latter with
+ * `movea.l <saved frame>,a6; lea -n(a6),a7` and then simply carries on: the
+ * guest abandons every frame in between. Executed as an ordinary jump, those
+ * abandoned frames stay on the C stack, run their epilogues on the way out and
+ * pop the guest stack again for each one -- which walks SP down past zero and
+ * turns every later read into a 0. Matching the depth lets us unwind the C
+ * stack the same way the guest unwound its own. */
+#define RET_SENTINEL_BASE 0xCAFE0000u
+#define RET_SENTINEL (RET_SENTINEL_BASE | 0xFFFFu)   /* depth-less, for tests */
+#define IS_SENTINEL(v) (((v) & 0xFFFF0000u) == RET_SENTINEL_BASE)
+#define SENTINEL_DEPTH(v) ((int)((v) & 0xFFFFu))
+#define MAX_UNWIND 512
+static jmp_buf g_unwind[MAX_UNWIND];
+
+/* Unwind to the frame that pushed this sentinel. Returning to our own frame is
+ * an ordinary return and needs no help. */
+static void unwind_to(int depth){
+    if(depth < 0 || depth >= MAX_UNWIND) return;
+    if(depth >= g_shadow_sp - 1) return;          /* our own frame: normal */
+    g_shadow_sp = depth + 1;
+    longjmp(g_unwind[depth], 1);
+}
+
 
 /* MRMAXCALLS=<n>: stop after n lifted transfers and print the shadow stack.
  *
@@ -215,7 +239,7 @@ static int g_watch_a6 = -1;
 
 static uint32_t g_brk = 0xFFFFFFFFu;
 void m68k_call(uint32_t addr) {
-    if (addr == RET_SENTINEL) return;          /* Pascal fn jmp'd to the fake return */
+    if (IS_SENTINEL(addr)) { unwind_to(SENTINEL_DEPTH(addr)); return; }
     if (g_watch_a6 < 0) g_watch_a6 = getenv("MRWATCH") != 0;
     if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
     if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
@@ -283,8 +307,11 @@ void m68k_call(uint32_t addr) {
     bump_ticks();
     if (g_shadow_sp < 512) g_shadow[g_shadow_sp] = addr;
     g_shadow_sp++;   /* depth still counts past the buffer it records into */
-    SP -= 4; m68k_w32(SP, RET_SENTINEL);        /* fake return address on the 68k stack */
-    uint32_t after = SP;
+    int mydepth = g_shadow_sp - 1;
+    if(mydepth < 0 || mydepth >= MAX_UNWIND) mydepth = MAX_UNWIND - 1;
+    SP -= 4; m68k_w32(SP, RET_SENTINEL_BASE | (uint32_t)mydepth);
+    volatile uint32_t after = SP;
+    volatile int unwound = 0;
     /* MRWATCH=1: A6 is the frame pointer, and a callee is expected to hand it
      * back unchanged -- link/unlk exist to guarantee exactly that. A lifted
      * function that returns with A6 altered has corrupted its caller's frame,
@@ -300,8 +327,9 @@ void m68k_call(uint32_t addr) {
                                      "on entry to %06x (last %06x, before %06x)\n",
                              SP, M.memsize, addr, g_last_call, g_prev_call);
     }
-    uint32_t a6_in = M.a[6], sp_in = SP;
-    fn(entry);
+    volatile uint32_t a6_in = M.a[6], sp_in = SP;
+    if(setjmp(g_unwind[mydepth]) == 0) fn(entry);
+    else unwound = 1;                 /* a deeper frame exited non-locally */
     if (g_watch_a6 && SP >= M.memsize && sp_in < M.memsize) {
         static int said2 = 0;
         if (!said2++) fprintf(stderr, "m68k: %06x left SP at %08x (was %08x) -- "
@@ -310,7 +338,8 @@ void m68k_call(uint32_t addr) {
     if (g_watch_a6 && M.a[6] != a6_in)
         fprintf(stderr, "m68k: %06x returned with A6 %06x -> %06x (entry %06x, SP %06x -> %06x)\n",
                 addr, a6_in, M.a[6], entry, after, SP);
-    if (SP == after) SP += 4;                    /* C-style fn left it; discard */
+    /* After a non-local exit the guest chose SP itself; do not second-guess it. */
+    if (!unwound && SP == after) SP += 4;        /* C-style fn left it; discard */
     /* Pascal fn already popped it (and removed its args); SP is higher — leave it */
     if (g_shadow_sp > 0) g_shadow_sp--;
     g_last_call = last_in; g_prev_call = prev_in;
@@ -321,13 +350,16 @@ void m68k_call(uint32_t addr) {
  * aX,-(a7); rts) leaves the sentinel on top -> pop it so the caller's stack balances.
  * Anything else on top is a stack imbalance we can't follow: leave it and just
  * return to the C caller (m68k_call unwinds), matching the pre-sentinel behavior. */
-void m68k_rts(void) { if (m68k_r32(SP) == RET_SENTINEL) SP += 4; }
+void m68k_rts(void) {
+    uint32_t v = m68k_r32(SP);
+    if (IS_SENTINEL(v)) { SP += 4; unwind_to(SENTINEL_DEPTH(v)); }
+}
 
 /* A tail transfer (68k `jmp`): run the target with NO return address pushed, so
  * its eventual rts returns to *our* caller, not to us. This is how the compiler's
  * shared return tails (movea.l (a7)+,aX; ...; rts) and fall-throughs work. */
 void m68k_jump(uint32_t addr) {
-    if (addr == RET_SENTINEL) return;          /* rts'd to the fake return -> unwind */
+    if (IS_SENTINEL(addr)) { unwind_to(SENTINEL_DEPTH(addr)); return; }
     if (g_maxcalls < 0) { const char *e = getenv("MRMAXCALLS"); g_maxcalls = e ? atol(e) : 0; }
     if (g_maxcalls > 0 && ++g_calls > g_maxcalls) watchdog();
     uint32_t entry = 0;

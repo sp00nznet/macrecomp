@@ -47,6 +47,19 @@ All notable changes to this project are documented here. Format follows
   an unknown handle copies what the caller asked for -- safe, because this heap
   never reuses a block. A wiped handle is indistinguishable further on from data
   that was garbage all along, which is the worst kind of bug to chase.
+- **Non-local exits are now real.** Compiled Pascal unwinds several frames at
+  once with `movea.l <saved frame>,a6; lea -n(a6),a7` and then simply carries
+  on -- the guest abandons every frame in between. Run as an ordinary jump,
+  those abandoned frames stayed on the C stack, ran their epilogues on the way
+  out and popped the guest stack again for each one. HyperCard's idle handler
+  does this, and it walked SP down past zero: every later read returned 0, so
+  arguments arrived null, returns jumped to address 0, and the errors that
+  followed had nothing to do with the cause. (Those "no function at 000000"
+  messages were the symptom -- I had dismissed them as harmless, and they were
+  not.) The fake return address now carries the call depth that pushed it, so a
+  return can be told from an unwind, and the C stack unwinds with `longjmp` the
+  same way the guest unwinds its own. **Stack and frame corruption reports:
+  8 -> 0. Null jumps: dozens -> 0. HyperCard 6768 -> 10000 Toolbox calls.**
 - **`EventAvail` was consuming events.** It shares an implementation with
   `GetNextEvent`, but `EventAvail` reports the next event and *leaves it in the
   queue*. Every peek ate an event, so a title that polls with `EventAvail` and

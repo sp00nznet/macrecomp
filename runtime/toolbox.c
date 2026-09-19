@@ -52,10 +52,24 @@ static int g_peek_valid, g_peek_what, g_peek_msg, g_peek_h, g_peek_v;
 static uint32_t rgn_alloc(void);
 static Rect rd_rect(uint32_t p);
 static void rgn_put(uint32_t h, const Rect *r);
+static Rect rgn_get(uint32_t h);
+static int rect_empty(const Rect *r);
 /* An update event is only half the story: having been told to repaint, a Mac
  * application asks EmptyRgn(theWindow->updateRgn) whether there is anything to
  * repaint, and a window with no update region at all answers "no" and draws
  * nothing. So the region has to exist and has to say what is dirty. */
+/* GrafPort: device(0,2), portBits(2,14), portRect(16,8), visRgn(24,4),
+ * clipRgn(28,4). A port whose visRgn is null reads back as an empty rect, and a
+ * title that intersects against it to decide what to draw concludes nothing is
+ * visible and draws nothing. Both regions have to exist and cover the port. */
+static void port_regions(uint32_t p, const Rect *r){
+    if(!p) return;
+    for(int off = 24; off <= 28; off += 4){
+        uint32_t rgn = m68k_r32(p + off);
+        if(!rgn){ rgn = rgn_alloc(); if(!rgn) continue; m68k_w32(p + off, rgn); }
+        rgn_put(rgn, r);
+    }
+}
 static void win_dirty(uint32_t w, int dirty){
     if(!w) return;
     uint32_t rgn = m68k_r32(w + WR_UPDATERGN);
@@ -577,7 +591,8 @@ void m68k_trap(uint16_t raw){
     case 0xA852: /*HideCursor*/ case 0xA853: /*ShowCursor*/ case 0xA856: /*ObscureCursor*/
     case 0xA9B4: /*SystemTask*/ break;
     case 0xA86F: /*OpenPort*/ { uint32_t p=pop32(); if(p){ bitmap_screen(p+2);
-        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); g_cur_port=p; qd_set_port(1,screen_base(),QD_W/8,0,0,QD_W,QD_H);} } break;
+        Rect s; rect_set(&s,0,0,QD_W,QD_H); wr_rect(p+16,&s); port_regions(p,&s);
+        g_cur_port=p; qd_set_port(1,screen_base(),QD_W/8,0,0,QD_W,QD_H);} } break;
     case 0xA875: /*SetPortBits*/ { uint32_t bm=pop32();
         if(bm){
             /* SetPortBits *copies* the BitMap into thePort->portBits; it does
@@ -607,6 +622,7 @@ void m68k_trap(uint16_t raw){
          * hilited(1). A window whose visible byte is left at zero is one the
          * title will not draw into, however complete the port is. */
         m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, visible?1:0); m68k_w8(w+111, 1);
+        port_regions(w, &pr);
         win_dirty(w, 1);
         g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);                    /* Pascal result slot */
@@ -616,6 +632,7 @@ void m68k_trap(uint16_t raw){
         uint32_t w = wstor ? wstor : heap_alloc(256);
         Rect pr; rect_set(&pr,0,0,QD_H,QD_W); bitmap_screen(w+2); wr_rect(w+16,&pr);
         m68k_w16(w+108, 8 /*userKind*/); m68k_w8(w+110, 1); m68k_w8(w+111, 1);
+        port_regions(w, &pr);
         win_dirty(w, 1);
         g_front_win = w; g_update_pending = 1;
         m68k_w32(SP, w);
@@ -638,7 +655,14 @@ void m68k_trap(uint16_t raw){
         (void)pop32(); win_dirty(g_front_win, 1); g_update_pending = 1; break;
     /* BeginUpdate leaves the region set: the app is about to ask whether there
      * is anything to draw, and EndUpdate is where it stops being dirty. */
-    case 0xA922: /*BeginUpdate*/ (void)pop32(); g_update_pending = 0; break;
+    case 0xA922: /*BeginUpdate*/ { uint32_t w = pop32();
+        /* The real trap replaces the port's visRgn with what needs repainting,
+         * which is how an app discovers there is anything to do. */
+        if(w){ Rect u = rgn_get(m68k_r32(w + WR_UPDATERGN));
+               if(rect_empty(&u)) u = rd_rect(w + 16);
+               uint32_t vis = m68k_r32(w + 24);
+               if(vis) rgn_put(vis, &u); }
+        g_update_pending = 0; } break;
     case 0xA923: /*EndUpdate*/ { uint32_t w = pop32(); win_dirty(w, 0); } break;
     case 0xA924: /*FrontWindow*/ ret32(g_front_win); break;
     /* FindWindow is what turns a click into a destination. One full-screen card
