@@ -32,7 +32,16 @@ static int syn_x, syn_y, syn_down, syn_live;
 static void syn_tick(void){
     if(!syn_live) return;
     if(syn_down && !--syn_down) evpush(2/*mouseUp*/, 0, syn_x, syn_y);
-    else if(!syn_down && ++syn_live > 400) syn_live = 0;
+    /* The position must stay pinned well past the release. A title tracks a
+     * press in a tight loop and, on release, asks whether the mouse is STILL
+     * over the control before it sends mouseUp -- HyperCard will not run a
+     * button's script otherwise. That loop can ask thousands of times, so a
+     * short pin expires mid-track and the click reads as "dragged off".
+     * MRPIN tunes it. */
+    else if(!syn_down){
+        static long lim = -1;
+        if(lim < 0){ const char *e = getenv("MRPIN"); lim = e ? atol(e) : 200000; }
+        if(++syn_live > lim) syn_live = 0; }
 }
 
 int plat_open(const char *title, int scale){

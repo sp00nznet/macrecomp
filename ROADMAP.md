@@ -263,82 +263,42 @@ landing in Standard File, which `MRDOC` answers with a well-formed `SFReply`:
 `good`=1, type `STAK`, vRefNum -1 (which is what this File Manager reports),
 name `WHOLE EARTH`.
 
-**Where it stops now: the button's handler never runs.**
+**Where it stops now: `go to stack` never opens the file.**
 
-The click machinery is sound end to end. Traced trap by trap and confirmed by
-breakpoint counts that are zero without a click and non-zero with one:
+The click works. So does the script. An earlier version of this section said
+the handler never ran -- that was wrong, and the giveaway was in the message
+counts all along:
 
-| step | evidence |
+| message | dispatches with a click |
 |---|---|
-| event delivered, window resolved | `IsDialogEvent` false, `FindWindow` inContent on the card window |
-| dispatcher takes the mouseDown arm | `fn_1_1d52` -> `fn_1_1cb0` -> `fn_1_1cce`, both gates pass |
-| browse handler runs | **`fn_1_08a4`, twice** (press and release), 0 without a click |
-| the point is right | `a5-0xfda` = `006400f4` = v 100, h 244 |
-| the card is right | `a5-0x9d2` = 0x14dd = **card 5341**, the one with the button |
-| the part is found | `fn_19_120a` walks parts at +0x32, count at +0x24, rect at +6; `PtInRect` answers true for `77,214,124,274` |
-| the button handler runs | **`fn_1_0320`**, which tracks the press (its own `PtInRect` loop) |
-| `mouseDown` is sent | `jt 0xb82` message sends go 34,248 -> **42,007** with the click |
-| `mouseUp` is sent | **`fn_1_020c`, twice** with a click, **zero** without |
+| `mouseDown` | **4** -- propagating up button, card, background, stack, unhandled |
+| `mouseUp` | **1** -- *handled at the button, never passed on* |
+| `go` | 1 without a click, **5** with one |
 
-And then nothing. No file is opened, no Standard File, no error dialog, no
-`STR# 1002` fetch -- the log after the click is empty. HyperCard hands
-`mouseUp` to the Whole Earth button, whose script is
-`on mouseUp / visual effect barn door open / go to stack "Whole Earth" /
-end mouseUp`, and the handler is never entered. An unhandled message passing
-quietly up the chain and off the end is exactly what this looks like.
+A message that stops after one dispatch is a message that found a handler.
+`on mouseUp` in the Whole Earth button runs, and it executes its `go to stack
+"Whole Earth"`: the navigation executor `fn_21_0fcc` goes from 4 entries to 6.
 
-The message is dispatched correctly, too. `fn_1_0320` calls `jt 0xb82` =
-`fn_9_3fd0`, which returns immediately if the object's part id (its `$10(a6)`)
-is zero -- and with a click it is **not** zero. Diffing the arguments between
-a run with a click and one without isolates the new call exactly:
+And then nothing reaches the disc. Not one File Manager call follows the
+click -- no `Open`, no `GetFileInfo`, no `PBGetCatInfo`, no Standard File.
+HyperCard carries on idling quite happily (1.2 million traps after the click),
+so it has not crashed or hung; the `go` simply resolves to nothing and gives
+up without asking the file system anything.
 
-    args: 000008ea 000014dd 00540000 14dd0002
-           bkgd 2282  card 5341  part 0x54 = 84
+**The same symptom appears on the other route in.** Driving *File > Open
+Stack...* through the menu gets as far as Standard File, which `MRDOC` answers
+with a well-formed `SFReply` -- `good`=1, type `STAK`, name `Whole Earth` --
+and HyperCard then resolves the volume with `PBGetCatInfo` and never opens
+that file either. Two independent paths reach "I have a stack name" and both
+stop there, which points at one routine: **open a stack by name**.
 
-84 is the Whole Earth button. So `fn_9_3fd0` proceeds: it sets the object-type
-byte `a5-0x49aa` to 1, stores the object into `a5-0x49a4`/`a5-0x49a0`/
-`a5-0x499a`/`a5-0x499c`, and calls `fn_9_3f1e`, which swaps the object block
-in and runs the interpreter. The interpreter is alive -- `fn_9_41e2` is
-entered 232,048 times in a run with no click at all, and 264,972 with one.
+Worth knowing for that hunt: the EWEC Home stack's search paths still name the
+authoring machine's volumes (`Lazarus:Stacks for B13.1`, `HyperCard
+Help:Help Stacks`), not this volume, which is called `Untitled`.
 
-The object is resolved and its script is fetched, too. `fn_9_3f1e` reaches
-`fn_9_1670`, which dispatches on the object-type byte `a5-0x49aa` -- with a
-click it is called six times with types **1, 2, 2, 2, 3, 4**, all in range,
-and type 1 is the button. That arm calls `fn_9_13e6`, which looks the part up
-by id (`jt 0x1da2` = `fn_19_0f1e`, matching the block tag against 'CARD'/'BKGD'
-at seg19+0xfac and walking parts from +0x32), takes `part + 30` as the name,
-and calls `jt 0x1912` (`fn_17_0c22`, "skip one C string") **twice** -- once for
-the name and once for the empty string that follows it, which is how every
-part record on this disc is laid out (`'Whole Earth  on mouseUp...'`).
-`jt 0x1912` goes from 47,178 calls to 51,838 with a click, so that path runs.
-
-And the text is there. Guest memory at the loaded card block (`+0xa0` of the
-608-byte `CARD 5341` block) reads:
-
-    57686f6c 65204561 72746800 006f6e20 6d6f7573 6555700d ...
-    W h o l  e   E a  r t h      o n _  m o u s  e U p 
-
-byte for byte what is on the disc. So the script HyperCard is handed is
-correct.
-
-So everything from the event to "run this handler on this object" is
-measured working
-
-One strong lead for whoever picks this up. That object-type byte at
-`a5-0x49aa` is what `fn_9_1670` dispatches on, with a `subq.w #1 / beq` chain
-that handles **only 1 to 4** before falling through to `move.l #$421bebe` and
-HyperCard's own assertion. The raw bytes confirm the decode is right -- four
-cases, then `bra`. Values 1-4 are presumably button, field, card, background;
-**5 would be the stack**, and in the catalogue-as-Home build the byte does
-reach 5 (and then 0), which is exactly where that build raises
-*"Unexpected error 69320382"* and quits -- after `hide menuBar` from the
-catalogue's `on openStack` has already run. So a message sent to the *stack*
-object is the case this recomp gets wrong, and it is likely the same defect
-behind both symptoms
-
-Note the earlier note in this file that said the hit-test "answers nothing"
-was wrong: the not-found dispatches it was counting (`fn_1_2548`) happen six
-times a run with no click at all.
+Reproduce with `MRCLICK=244,100,300 MRKEYS=0` and
+`MRBRK=5e21c4 MRBRKMEM=3FB53C:3` to watch the messages go by; the message
+record is a token word at `a5-0x4ac4` followed by the name as a Pascal string.
 
 
 ### What "on screen and navigable" still needs
