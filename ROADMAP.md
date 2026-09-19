@@ -337,8 +337,12 @@ against the dirty rect at `a5-0x1d0a`, and that rect is (0,0,0,0), so the blit
 source at `a5-0x1318` is never filled and the blit copies emptiness.
 
 The dirty rect is filled only by the mode-1 full-redraw path, which needs the
-word at `a5-0x1022` to be 1; it reads 0. The routines that would set it all live
-in **CODE 13, which never executes** -- along with segments 2, 4-8, 10-12, 15
-and 18. That is not a loader fault: the jump table is fully populated for all 21
-segments and nothing reports an unmapped entry. The open question is what
-normally drives HyperCard into those paths.
+word at `a5-0x1022` to be 1; it reads 0. Every routine that sets it lives in
+CODE 13, and none of them is ever called: `fn_13_3dd6`, `fn_13_4e60`,
+`fn_13_5c86` and `fn_13_5d62` all measure zero entries. Twenty-two call sites
+lead into CODE 13 and several of them run constantly, but every one of them is
+gated on the mode already being 1 -- `fn_1_26a2`, which would call the full
+redraw, tests `cmp.w -$1022(a5)` first and is itself never reached.
+
+The open question is what normally drives HyperCard into a card show with a
+mode greater than 3.

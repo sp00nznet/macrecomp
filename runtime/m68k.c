@@ -316,6 +316,18 @@ void m68k_call(uint32_t addr) {
      * entered" stays pointing at whatever was called *deepest*, so every trap
      * reported after a call returns names the wrong caller. That sends you
      * reading a function that had nothing to do with it. */
+    /* MRSEGS=1: count function entries per 64K segment and print the histogram
+     * periodically. Counting trap *callers* instead, as I first did, only sees
+     * segments that happen to make Toolbox calls -- a segment can run hard and
+     * never appear. */
+    { static int on = -1; static long seg[256], n;
+      if (on < 0) on = getenv("MRSEGS") != 0;
+      if (on) { seg[(addr >> 16) & 0xFF]++;
+        if (++n % 50000 == 0) {
+            fprintf(stderr, "[segs]");
+            for (int i = 0; i < 256; i++) if (seg[i])
+                fprintf(stderr, " %d:%ld", i - 0x50, seg[i]);
+            fprintf(stderr, "\n"); } } }
     uint32_t last_in = g_last_call, prev_in = g_prev_call;
     if (addr != g_last_call) { g_prev_call = g_last_call; g_last_call = addr; }
     bump_ticks();
