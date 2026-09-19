@@ -44,6 +44,8 @@ void qd_pen_mode(int mode);
 void qd_pen_pat_black(int black);       /* 1 = black pattern, 0 = white */
 void qd_frame_rect(const Rect *r);
 void qd_paint_rect(const Rect *r);      /* fill with pen pattern */
+int  qd_port_to_screen(void);           /* force screen, returns old */
+void qd_port_restore(int was);
 void qd_erase_rect(const Rect *r);      /* fill white */
 void qd_invert_rect(const Rect *r);
 void qd_fill_rect(const Rect *r, int black);

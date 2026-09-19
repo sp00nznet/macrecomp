@@ -74,7 +74,12 @@ static void shot(void){
     /* Write then rename: this runs on every present, so a run killed by a
      * timeout would otherwise leave a half-written file exactly when the
      * picture is wanted. */
-    char tmp[300];
+    char tmp[300], real[300];
+    /* MRSHOTSEQ=1 keeps every frame instead of overwriting. One frame cannot
+     * tell "never drew" from "drew then lost it", and that is the whole
+     * question when a dialog and a card fight over the screen. */
+    {   static long seq; const char *q = getenv("MRSHOTSEQ");
+        if(q && atoi(q)){ snprintf(real, sizeof real, "%s.%04ld", path, seq++); path = real; } }
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = fopen(tmp, "wb");
     if(!f) return;
@@ -194,9 +199,16 @@ int plat_next_event(int *what,int *msg,int *h,int *v){
         /* MRKEYS=1: answer modal dialogs with Return so an unattended run keeps
          * going. Off by default here -- with a window open there is a person to
          * click, and a synthetic keypress would fight them for the dialog. */
-        static int on=-1; static long polls;
-        if(on<0){ const char *e=getenv("MRKEYS"); on = e?atoi(e):0; }
-        if(on && ++polls % 3000 == 0){
+        static int on=-1; static long polls; static long sent;
+        static long cap;
+        if(on<0){ const char *e=getenv("MRKEYS"); on = e?atoi(e):0;
+                  const char *c=getenv("MRKEYSN"); cap = c?atol(c):0; }
+        /* MRKEYSN=<n>: stop after n keys. Unattended Returns are needed to get
+         * past a modal dialog, but a title that keeps receiving them walks its
+         * own menus and eventually quits -- which is what was ending these
+         * runs a few seconds after the dialog was dismissed. */
+        if(on && (!cap || sent < cap) && ++polls % 3000 == 0){
+            sent++;
             if(what)*what=3; if(msg)*msg=13; if(h)*h=0; if(v)*v=0; return 1; }
         if(what)*what=0; return 0; }
     if(what)*what=evq[evhead].what; if(msg)*msg=evq[evhead].msg;

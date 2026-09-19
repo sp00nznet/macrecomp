@@ -251,6 +251,33 @@ void m68k_loop_tick(uint32_t pc) {
 static int g_watch_a6 = -1;
 
 static uint32_t g_brk = 0xFFFFFFFFu;
+/* Shared by the breakpoint and by any trap that wants it: see MRBRKFIND. */
+void m68k_find_probe(const char *tag){
+          { const char *want = getenv("MRBRKFIND");
+          if (want && *want) {
+            size_t wl = strlen(want);
+            for (uint32_t b = 0; b + wl < M.memsize; b++) {
+                if (memcmp(M.mem + b, want, wl) != 0) continue;
+                fprintf(stderr, "[%s] found \"%s\" at %06x:", tag, want, b);
+                uint32_t lo = b > 512 ? b - 512 : 0, hi = b + 512;
+                for (int i = 0; i < 8; i++) {
+                    if (M.d[i] >= lo && M.d[i] <= hi) fprintf(stderr, " d%d=%+d", i, (int)(M.d[i]-b));
+                    if (M.a[i] >= lo && M.a[i] <= hi) fprintf(stderr, " a%d=%+d", i, (int)(M.a[i]-b)); }
+                for (long o = -0x7000; o < 0x1000; o += 2) {
+                    uint32_t v = m68k_r32((uint32_t)(M.a[5] + o));
+                    if (v >= lo && v <= hi) fprintf(stderr, " a5%+ld=%+d", o, (int)(v-b)); }
+                fprintf(stderr, "\n");
+                /* And the text itself: a script that was mangled on the way
+                 * into memory explains a parse error with no further work. */
+                {   uint32_t f = b > 360 ? b - 360 : 0;
+                    fprintf(stderr, "[%s] text %06x: ", tag, f);
+                    for (uint32_t i = f; i < b + 80 && i < M.memsize; i++){
+                        unsigned char c = M.mem[i];
+                        fputc(c == 13 ? 10 : (c >= 32 && c < 127 ? c : 46), stderr); }
+                    fprintf(stderr, "\n"); }
+                break; } } }
+}
+
 void m68k_call(uint32_t addr) {
     if (IS_SENTINEL(addr)) { unwind_to(SENTINEL_DEPTH(addr)); return; }
     if (g_watch_a6 < 0) g_watch_a6 = getenv("MRWATCH") != 0;
@@ -292,6 +319,11 @@ void m68k_call(uint32_t addr) {
                 for (unsigned i = 0; i < n; i++)
                     fprintf(stderr, " %08x", m68k_r32(base + 4u*i));
                 fprintf(stderr, "\n"); } } }
+        /* MRBRKFIND=<text>: locate that text in guest memory, then report every
+         * register and A5 global pointing into it. A parser that stopped in the
+         * wrong place cannot be found from register values alone -- what you
+         * need is the cursor's offset within the source it is reading. */
+        m68k_find_probe("brk");
         fprintf(stderr, "[brk %06x] args:", addr);
         for (int i = 0; i < 8; i++) fprintf(stderr, " %08x", m68k_r32(SP + 4u*i));
         fprintf(stderr, "\n");

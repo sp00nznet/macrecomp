@@ -59,6 +59,12 @@ static int getpix(int h, int v){
     return (m68k_r8(cur.base + (uint32_t)ly*cur.rowbytes + (lx>>3)) >> (7-(lx&7))) & 1;
 }
 
+/* A dialog belongs on the screen, always. The title may have SetPortBits'd to
+ * an offscreen buffer -- HyperCard draws its card into one -- and a dialog
+ * drawn there *erases the card art* instead of covering it, permanently. */
+int  qd_port_to_screen(void){ int was = cur.is_screen; cur.is_screen = 1; return was; }
+void qd_port_restore(int was){ cur.is_screen = was; }
+
 void qd_init(void){ memset(qd_fb, 0, sizeof qd_fb); pen_h=pen_v=0; pen_w=pen_h_sz=1;
                     pen_black=1; pen_mode=0; rect_set(&clip,0,0,QD_W,QD_H); }
 void qd_set_clip(const Rect *r){ if(r) clip=*r; }

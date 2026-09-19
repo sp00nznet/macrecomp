@@ -14,6 +14,8 @@
  * Record layouts follow Inside Macintosh; no Apple code is used. */
 #include "macrecomp/m68k.h"
 #include "macrecomp/toolbox.h"
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /* ---- DITL item types (Inside Macintosh I) ---- */
@@ -139,7 +141,8 @@ void ctl_set_hilite(uint32_t c, int h){ if(c) m68k_w8(c+CTL_HILITE, h); }
 Rect ctl_rect(uint32_t c){ Rect r={0,0,0,0}; if(c) r=rd_r(c+CTL_RECT); return r; }
 
 void ctl_draw(uint32_t c){
-    if(!c || !m68k_r8(c+CTL_VIS)) return;
+    int _wasport = qd_port_to_screen();
+    if(!c || !m68k_r8(c+CTL_VIS)){ qd_port_restore(_wasport); return; }
     Rect r = rd_r(c+CTL_RECT);
     Dlg *o = owner_of(c);
     if(o){ int dh,dv; origin_of(o,&dh,&dv); rect_offset(&r,dh,dv); }
@@ -150,6 +153,7 @@ void ctl_draw(uint32_t c){
         qd_draw_text(t+1, t[0]);
     }
     if(m68k_r8(c+CTL_HILITE)==1) qd_invert_rect(&r);   /* pressed */
+    qd_port_restore(_wasport);
 }
 
 /* ---- dialogs ---- */
@@ -213,7 +217,24 @@ void dlg_set_bounds(uint32_t dlgptr, const Rect *b){
     d->bounds=*b; d->framed=1;
 }
 
-void dlg_dispose(uint32_t dlgptr){ Dlg *d=find(dlgptr); if(d) d->used=0; }
+/* qd_fb is an overlay: a set pixel wins over the title's own screen memory,
+ * so whatever a dialog painted there keeps hiding the card until it is
+ * cleared. Erasing the rect is the restore -- a clear pixel falls through to
+ * what the title drew underneath, which is still intact. */
+void dlg_dispose(uint32_t dlgptr){
+    Dlg *d = find(dlgptr);
+    if(!d) return;
+    if(d->framed){
+        int was = qd_port_to_screen();
+        Rect r = d->bounds; r.right += 3; r.bottom += 3;   /* include the shadow */
+        Rect clip; qd_get_clip(&clip);
+        Rect all; rect_set(&all, 0, 0, QD_W, QD_H); qd_set_clip(&all);
+        qd_erase_rect(&r);
+        qd_set_clip(&clip);
+        qd_port_restore(was);
+    }
+    d->used = 0;
+}
 int  dlg_count(uint32_t dlgptr){ Dlg *d=find(dlgptr); return d?d->n:0; }
 
 int dlg_get_item(uint32_t dlgptr, int n, int *type, uint32_t *h, Rect *box){
@@ -270,7 +291,8 @@ int dlg_find_item(uint32_t dlgptr, int h, int v){
 }
 
 void dlg_draw(uint32_t dlgptr){
-    Dlg *d=find(dlgptr); if(!d) return;
+    int _wasport = qd_port_to_screen();
+    Dlg *d=find(dlgptr); if(!d){ qd_port_restore(_wasport); return; }
     if(d->framed){                       /* white card, black border, drop shadow */
         Rect sh=d->bounds; rect_offset(&sh,3,3); qd_paint_rect(&sh);
         qd_erase_rect(&d->bounds);
@@ -286,6 +308,9 @@ void dlg_draw(uint32_t dlgptr){
         if(it->type==IT_EDITTEXT){ Rect fr=box; rect_inset(&fr,-3,-3); qd_frame_rect(&fr); }
         if(it->type==IT_EDITTEXT || it->type==IT_STATTEXT){
             uint8_t buf[MAX_TEXT]; subst(buf, it->text, MAX_TEXT);
+            /* MRDLG=1: what the dialog actually says. A modal alert with no
+             * one to read it is the whole reason a run stops here. */
+            if(getenv("MRDLG")) fprintf(stderr, "[dlg] %.*s\n", buf[0], buf+1);
             qd_pen_to(box.left, box.top + 10);
             qd_draw_text(buf+1, buf[0]);
         }
@@ -295,6 +320,7 @@ void dlg_draw(uint32_t dlgptr){
         Rect r=d->it[d->def_item-1].box; rect_offset(&r,dh,dv);
         rect_inset(&r,-4,-4); qd_frame_rect(&r);
     }
+    qd_port_restore(_wasport);
 }
 
 /* ModalDialog: pump until an enabled item is hit, or Return/Enter.

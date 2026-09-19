@@ -8,6 +8,70 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **A dialog left its pixels on the screen for good.** `qd_fb` is an overlay --
+  a set pixel wins over whatever the title drew into its own screen memory --
+  and `dlg_dispose` only marked the slot free. Everything an alert painted
+  therefore kept hiding the card underneath it forever. Erasing the dialog's
+  rect (plus its drop shadow) *is* the restore: a clear pixel falls through to
+  the title's screen memory, which was never damaged.
+
+- **A dialog could be drawn into the title's offscreen buffer.** `dlg_draw` and
+  `ctl_draw` used whatever port was current. HyperCard draws its card into an
+  offscreen bitmap, so an alert raised mid-draw would erase card art rather
+  than cover it. Both now force the screen port and restore it on every exit.
+
+### Corrected
+
+- **The catalog does render, full-screen, in normal operation.** Earlier
+  entries here reported that only part of the card reached the screen and that
+  an error dialog covered rows 91-168. Both were artifacts of the `MRKEYS`
+  probe. A frame sequence (`MRSHOTSEQ`, below) settles it: the card is complete
+  at frame 302 and byte-identical for the next 8,255 frames when nothing is
+  injected. The ink drop always landed at frame 3002 -- exactly where `MRKEYS`
+  fires its first synthetic Return. One overwritten screenshot cannot tell
+  "never drew" from "drew, then something else happened"; a sequence can.
+
+### Added
+
+- `MRSHOTSEQ=1` keeps every frame instead of overwriting one file.
+- `MRKEYSN=<n>` caps the injected Returns. Unattended Returns get a run past a
+  modal dialog, but a title that keeps receiving them walks its own menus and
+  quits -- which was silently ending these runs seconds after the dismissal.
+- `MRCLICK` now takes a `;`-separated click script, so one run can open a stack
+  and then follow a link on the card it lands on.
+- `MRTRAPS=1` prints the busiest traps at exit. A full log says nothing about a
+  steady-state loop; the shape is in the counts.
+- `MRBRKFIND=<text>` finds that text in guest memory and reports every register
+  and A5 global pointing into it, plus the text itself.
+- `MRDLG=1` prints what a dialog actually says.
+
+### Investigated
+
+- **`pass idle` fails to compile, and that is what halts a session.** The
+  failing handler is the *Home* stack's `on idle`, so it fires whatever stack
+  is in front. Traced end to end:
+  `fn_9_3358` (end-of-statement check) -> `fn_9_02b2` (classifier) -> WTLK 1
+  entry 294 = `pass`, type byte 2 -> the type-2 arm -> `fn_10_0a8c`, the
+  argument parser reached through the A5 table at `a5-0x31be`, entry 3.
+
+  `fn_10_0a8c` enforces HyperCard's real rule: the word after `pass` must name
+  the enclosing handler. It takes that name from `*(a5-0x57f0)`. At the
+  failure that record's name field points at `0x77f972`, which is **all
+  zeros** -- an empty name, so nothing matches and `fn_9_3306` raises STR# 1002
+  item 53, `Can't understand what's after "^0"`.
+
+  Ruled out along the way, each by reading the emitted C against the 68000
+  manual: `moveq` sign-extension, the A7 byte-size `-(a7)`/`(a7)+` special
+  case, the word-indexed table reads, and the zero table at `a5-0x32ea` --
+  that one is *correctly* zero, because all 75 registrations in `fn_3_1378`
+  push `clr.l` for it.
+
+  Still open: which of the four writers of `a5-0x57f0` (CODE 12 `0x0ebe` sets
+  the sentinel; CODE 14 `0x1b7c`, `0x1ea0`, `0x2354`, `0x27cc` set real
+  records) leaves the name empty.
+
+### Fixed
+
 - **The Window Manager's low-level half was missing, and leaking arguments.**
   `CalcVis`, `CalcVBehind`, `ClipAbove`, `PaintOne`, `PaintBehind`, `SaveOld`
   and `DrawNew` ($A909-$A90F) all fell through to the unimplemented-trap log,

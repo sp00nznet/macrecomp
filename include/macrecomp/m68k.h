@@ -174,6 +174,7 @@ static inline uint32_t m68k_roxr(uint32_t v,int c,int sz){
 }
 
 /* ---- Toolbox trap dispatch (implemented by the HAL) ---- */
+void m68k_find_probe(const char *tag);
 void m68k_trap(uint16_t word);     /* word = the full A-line opcode ($Axxx) */
 
 /* ---- function table: original 24-bit code address -> lifted C function ----

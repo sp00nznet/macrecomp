@@ -110,6 +110,14 @@ static void port_set_clip(const Rect *r){
     if(!rgn){ rgn = rgn_alloc(); if(!rgn) return; m68k_w32(g_cur_port + 28, rgn); }
     rgn_put(rgn, r);
 }
+/* Every visible window owes a repaint, and the app owes itself an updateEvt
+ * to do it -- called when something drawn over them goes away. */
+static void win_dirty(uint32_t w, int dirty);
+static void dlg_expose_behind(void){
+    for(int i = 0; i < g_nwins; i++)
+        if(g_wins[i] && m68k_r8(g_wins[i] + 110)) win_dirty(g_wins[i], 1);
+    g_update_pending = 1;
+}
 static void win_dirty(uint32_t w, int dirty){
     if(!w) return;
     uint32_t rgn = m68k_r32(w + WR_UPDATERGN);
@@ -480,8 +488,20 @@ static void mr_text_probe(const char *tag){
         fprintf(stderr,"\"\n"); }
 }
 
+static unsigned long g_trapn[4096];
+static void trap_hist(void){
+    fprintf(stderr, "[traps] busiest:\n");
+    for(int k = 0; k < 15; k++){
+        int best = -1;
+        for(int i = 0; i < 4096; i++) if(g_trapn[i] && (best < 0 || g_trapn[i] > g_trapn[best])) best = i;
+        if(best < 0) return;
+        fprintf(stderr, "  $A%03X  %lu\n", best, g_trapn[best]); g_trapn[best] = 0; } }
 void m68k_trap(uint16_t raw){
     uint16_t w = norm(raw);
+    /* MRTRAPS=1: what the title actually spends its traps on. A full log is
+     * useless for a steady-state loop -- the shape is in the counts. */
+    if(getenv("MRTRAPS")){ static int reg; if(!reg){ reg = 1; atexit(trap_hist); }
+                           g_trapn[w & 0xFFF]++; }
     if(getenv("MRPROBE") && w==0xA9C8){
         uint32_t a5=M.a[5];
         fprintf(stderr,"  PROBE WTLK globals: %08x %08x %08x %08x  (a5=%08x)\n",
@@ -699,10 +719,22 @@ void m68k_trap(uint16_t raw){
          * loop (default 200). Counted here rather than in the platform layer,
          * which the modal-dialog loop also polls long before the title gets
          * this far. */
-        {   static int cx=-1, cy, cwhen, fired; static long n;
-            if(cx < 0){ const char *e=getenv("MRCLICK"); cx=0; cwhen=200;
-                        if(e) sscanf(e, "%d,%d,%d", &cx, &cy, &cwhen); }
-            if(cx > 0 && !fired && ++n >= cwhen){ fired=1; plat_inject_click(cx, cy); } }
+        {   enum { MAXCLK = 16 };
+            static struct { int x, y; long when; } clk[MAXCLK];
+            static int nclk = -1, next; static long n;
+            if(nclk < 0){
+                nclk = 0;
+                const char *e = getenv("MRCLICK");
+                while(e && *e && nclk < MAXCLK){
+                    int x, y; long w = 200;
+                    if(sscanf(e, "%d,%d,%ld", &x, &y, &w) < 2) break;
+                    clk[nclk].x = x; clk[nclk].y = y; clk[nclk].when = w; nclk++;
+                    e = strchr(e, ';'); if(e) e++; } }
+            /* Each click waits for its own trip count, so one run can open the
+             * stack and then follow a link on the card it lands on -- which is
+             * the only way to show navigation without a person at the mouse. */
+            if(next < nclk && ++n >= clk[next].when){
+                plat_inject_click(clk[next].x, clk[next].y); next++; } }
         uint32_t evp=pop32(); (void)pop16(); int what=0,msg=0,h=0,v=0;
         plat_pump();
         int got;
@@ -1078,6 +1110,14 @@ void m68k_trap(uint16_t raw){
         int hit = d ? dlg_modal(d) : 1;
         if(d) dlg_dispose(d);
         g_front_dlg = 0;
+        /* A dialog here is painted straight into the one framebuffer, and
+         * nothing puts back what was under it. On real hardware the Window
+         * Manager either saves those bits or hands the windows below an
+         * update event; with neither, an alert leaves its rectangle stamped
+         * over the card for the rest of the run -- which is exactly what was
+         * covering HyperCard's card after a script error. Ask for the repaint
+         * instead. */
+        dlg_expose_behind();
         ret16((uint16_t)hit);
     } break;
     case 0xA895: /*ShutDown*/ M.d[0]=0; break;   /* selector-dispatched; nothing to do */
@@ -1407,7 +1447,8 @@ void m68k_trap(uint16_t raw){
         ret32(make_dialog(dstor, items?m68k_r32(items):0, &b));
     } break;
     case 0xA983: /*DisposeDialog*/ { uint32_t d=pop32(); dlg_dispose(d);
-        if(g_front_dlg==d) g_front_dlg=0; } break;
+        if(g_front_dlg==d) g_front_dlg=0;
+        dlg_expose_behind(); } break;
     case 0xA981: /*DrawDialog*/ case 0xA978: /*UpdtDialog*/ { uint32_t d=pop32();
         if(w==0xA978) (void)pop32();               /* UpdtDialog also takes updateRgn */
         dlg_draw(d); } break;
@@ -1427,7 +1468,8 @@ void m68k_trap(uint16_t raw){
     case 0xA98F: /*SetDialogItemText*/ { uint32_t str=pop32(), h=pop32(); dlg_set_text_h(h,str); } break;
     case 0xA827: /*HideDialogItem*/ { int16_t n=pop16(); uint32_t d=pop32(); dlg_hide_item(d,n,1); } break;
     case 0xA828: /*ShowDialogItem*/ { int16_t n=pop16(); uint32_t d=pop32(); dlg_hide_item(d,n,0); } break;
-    case 0xA98B: /*ParamText*/ { uint32_t p3=pop32(),p2=pop32(),p1=pop32(),p0=pop32();
+    case 0xA98B: /*ParamText*/ { m68k_find_probe("paramtext");
+        uint32_t p3=pop32(),p2=pop32(),p1=pop32(),p0=pop32();
         /* ^0-^3 are what an alert actually says. A title that reports an error
          * by number puts the number here, so this is often the only place the
          * program tells you what went wrong. */
