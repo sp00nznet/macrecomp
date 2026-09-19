@@ -8,6 +8,19 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **`SFPGetFile` was writing its answer to address 0.** The call takes nine
+  arguments -- `where, prompt, fileFilter, numTypes, typeList, dlgHook,
+  VAR reply, dlgID, filterProc` -- so `reply` is the **third** thing off the
+  stack, not the first. Taking the first pop as the reply handed back
+  `filterProc`, which is nil, so the record was written nowhere and every
+  caller read an untouched reply, i.e. "cancelled", however well `MRDOC`
+  named the document. The sequence also popped 30 bytes rather than 32.
+  `SFGetFile` (selector 2) was already right.
+- **`PostEvent` ($A02F) was unimplemented.** A title posting an event into its
+  own queue expects `GetNextEvent` to hand it back; the trap answered "error"
+  instead, and HyperCard abandoned what it was doing. It now goes into the
+  same event ring as everything else.
+
 - **Every window's `portRect` was transposed.** `rect_set` takes
   `(left, top, right, bottom)`, and four call sites passed it
   `(0, 0, height, width)` -- so on a 512x342 screen every window came out

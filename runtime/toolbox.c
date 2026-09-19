@@ -916,6 +916,13 @@ void m68k_trap(uint16_t raw){
      * this runtime's heap starts at 8 MB and runs to 30 MB. The address is
      * already clean, so hand it straight back. */
     case 0xA055: /*StripAddress*/ break;
+    /* PostEvent(eventNum in D0.w, eventMsg in A0): OSErr in D0. A title posts
+     * an event to its own queue and expects GetNextEvent to hand it back --
+     * HyperCard does this on the way into opening a document, and left
+     * unimplemented the trap answered "error" and the open was abandoned. */
+    case 0xA02F: /*PostEvent*/
+        plat_post_event((int)(int16_t)(M.d[0] & 0xFFFFu), (int)M.a[0]);
+        M.d[0] = 0; break;
     /* Colour QuickDraw is not implemented, and a device list with no entries is
      * the honest answer -- a null main device says "monochrome" rather than
      * handing back something that cannot be walked. */
@@ -1094,10 +1101,25 @@ void m68k_trap(uint16_t raw){
         case 2: /*SFGetFile(where,prompt,filter,numTypes,typeList,hook,reply)*/
             reply=pop32(); (void)pop32(); (void)pop32(); (void)pop16();
             (void)pop32(); (void)pop32(); (void)pop32(); break;
-        case 4: /*SFPGetFile: +dlgID, filterProc*/
-            reply=pop32(); (void)pop32(); (void)pop32(); (void)pop32();
-            (void)pop32(); (void)pop16(); (void)pop32(); (void)pop32();
-            (void)pop32(); break;
+        case 4:
+            /* SFPGetFile(where, prompt, fileFilter, numTypes, typeList,
+             * dlgHook, VAR reply, dlgID, filterProc) -- nine arguments, 32
+             * bytes. `reply` is the THIRD thing off the stack, not the first:
+             * dlgID and filterProc come after it. Taking the first pop as the
+             * reply handed back filterProc, which is nil, so the answer was
+             * written to address 0 and the caller saw an untouched record --
+             * i.e. "cancelled" -- however well MRDOC named the document. The
+             * old sequence also popped 30 bytes rather than 32. */
+            (void)pop32();                  /* filterProc */
+            (void)pop16();                  /* dlgID      */
+            reply=pop32();                  /* VAR reply  */
+            (void)pop32();                  /* dlgHook    */
+            (void)pop32();                  /* typeList   */
+            (void)pop16();                  /* numTypes   */
+            (void)pop32();                  /* fileFilter */
+            (void)pop32();                  /* prompt     */
+            (void)pop32();                  /* where      */
+            break;
         case 1: /*SFPutFile*/
             reply=pop32(); (void)pop32(); (void)pop32(); (void)pop32();
             (void)pop32(); break;

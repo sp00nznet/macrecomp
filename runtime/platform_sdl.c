@@ -173,6 +173,10 @@ uint32_t plat_ticks(void){ return (SDL_GetTicks()-start_ms)*60u/1000u; }
 /* Injected from the Toolbox HAL rather than counted here: this function is
  * also polled by the modal-dialog loop long before the title reaches its own
  * event loop, so a count kept here fires the click into the wrong consumer. */
+/* PostEvent: the title putting an event into its own queue. It expects to
+ * read it back out of GetNextEvent like any other. */
+void plat_post_event(int what, int msg){ evpush(what, msg, syn_x, syn_y); }
+
 void plat_inject_click(int x, int y){
     syn_x = x; syn_y = y; syn_live = 1;
     /* How long the press is held, counted in guest observations of the mouse.

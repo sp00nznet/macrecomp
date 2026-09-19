@@ -35,6 +35,8 @@ void qd_get_pen(int *h, int *v);
 uint32_t mr_screen_base(void);
 /* Queue a synthetic click (MRCLICK); driven by the HAL's event loop. */
 void plat_inject_click(int x, int y);
+/* Queue an event the guest posted with PostEvent. */
+void plat_post_event(int what, int msg);
 void qd_line_to(int h, int v);
 void qd_line(int dh, int dv);
 void qd_pen_size(int w, int h);
