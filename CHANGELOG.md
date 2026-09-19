@@ -8,6 +8,29 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **OS traps were not setting the condition codes.** The register-based half
+  of the trap table returns its result in `D0` *and leaves the flags set from
+  it*; compiled code branches on that directly. HyperCard's string-table
+  insert is
+
+      a024        _SetHandleSize
+      660c        bne.b  <skip the append>
+
+  and with the flags left over from whatever ran before the trap, that branch
+  was a coin toss. When it went the wrong way the table was grown and nothing
+  written into it, so every later lookup missed.
+
+  That is what made `go to stack "Whole Earth"` resolve to a nameless
+  destination: the stack's name is interned into two tables and the
+  descriptor carries the pair of indices, so a failed insert produced a null
+  reference, `fn_21_3978` concluded "this is the stack we are already in",
+  and the open was skipped -- silently, because nothing had gone wrong as far
+  as HyperCard could tell.
+
+  **With the flags set, clicking the catalogue's button opens the catalogue**:
+  `Open 'Whole Earth'`, `OpenRF 'Whole Earth' -> refNum 20 (41445 bytes)`.
+  Toolbox traps (bit 11 set) return on the stack and are left alone.
+
 - **`SFPGetFile` was writing its answer to address 0.** The call takes nine
   arguments -- `where, prompt, fileFilter, numTypes, typeList, dlgHook,
   VAR reply, dlgID, filterProc` -- so `reply` is the **third** thing off the

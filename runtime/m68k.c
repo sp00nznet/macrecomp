@@ -373,6 +373,18 @@ void m68k_call(uint32_t addr) {
                       for (int i = 0; i < 3; i++) sav[5+i] = M.a[2+i]; }
     if(setjmp(g_unwind[mydepth]) == 0) fn(entry);
     else unwound = 1;                 /* a deeper frame exited non-locally */
+    /* MRRET=<hex addr>: print what a function hands back. A Pascal callee pops
+     * the sentinel and its own arguments, so SP is left pointing at the result
+     * slot the caller reserved -- which is the one thing MRBRK, reporting only
+     * on entry, can never show. Answering "does this return zero?" by
+     * inference rather than by reading it is how several wrong conclusions got
+     * made in this repo's history. */
+    {   static uint32_t rw = 0xFFFFFFFFu;
+        if (rw == 0xFFFFFFFFu) { const char *e = getenv("MRRET");
+                                 rw = e ? (uint32_t)strtoul(e,0,16) : 0; }
+        if (rw && addr == rw)
+            fprintf(stderr, "[ret %06x] = %08x (word %04x, byte %02x) sp=%06x\n",
+                    addr, m68k_r32(SP), m68k_r16(SP), m68k_r8(SP), SP); }
     if (g_watch_a6 && SP >= M.memsize && sp_in < M.memsize) {
         static int said2 = 0;
         if (!said2++) fprintf(stderr, "m68k: %06x left SP at %08x (was %08x) -- "

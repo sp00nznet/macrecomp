@@ -1579,4 +1579,18 @@ void m68k_trap(uint16_t raw){
 
     default: logtrap(w); break;
     }
+    /* An OS trap -- the register-based half of the trap table, bit 11 clear --
+     * returns its result in D0 *and leaves the condition codes set from it*.
+     * Compiled code relies on that: HyperCard's string-table insert does
+     *
+     *     a024        _SetHandleSize
+     *     660c        bne.b  <skip the append>
+     *
+     * and with the flags left over from whatever ran before the trap, that
+     * branch is a coin toss. When it goes the wrong way the table is grown and
+     * nothing is written into it, so every later lookup misses -- which is how
+     * `go to stack "Whole Earth"` came to resolve to a nameless destination.
+     * Toolbox traps (bit 11 set) return on the stack and must not touch the
+     * flags here. */
+    if(!(raw & 0x0800)) fl_logic(M.d[0], 2);
 }
