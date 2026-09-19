@@ -295,25 +295,40 @@ the one whose card art did reach the screen, leaves `a5-0x2396` null too. The
 card gets painted through the update path (`fn_21_633a` -> the WOBA expander),
 which does not need the card object; clicking does.
 
-Pushing on that: `jt 0x225a` is called from `fn_1_214a`, which takes a menu ID
-and an item number -- it is HyperCard's **menu command dispatcher**, reached
-through a PC-relative jump table (`4EFB` at `seg1+0x2360`, fourteen word
-offsets at `0x2364`; the lifter follows it correctly, the table bytes merely
-disassemble as nonsense). So the routines that set the current card hang off
-menu commands, and `Go > First` is one of them.
+Pushing on that: the routines that set the current card hang off HyperCard's
+**menu command dispatcher** `fn_1_214a`, reached through a PC-relative jump
+table (`4EFB` at `seg1+0x2360`; the lifter follows it correctly, the table
+bytes merely disassemble as nonsense). Driving the menu works all the way
+down -- `MRMENU=4,6` (Go > First) resolves the item name out of the `MENU`
+resource, reaches `fn_1_214a` with menu 4 item 6, dispatches through
+`jt 0x1642` = `fn_16_2c52` (the Go command), its own item table, `jt 0x2092`
+= `fn_21_133e`, and `fn_21_0fcc`, the navigation executor, which runs **six
+times a run**. `a5-0x2396` stays null throughout.
 
-Driving that menu directly works and still does not produce a card:
+Four things are now ruled out by measurement, so none needs redoing:
 
-    MRCLICK=40,8,300 MRMENU=4,6        (Go > First)
-    [menu] choosing menu 4 item 6
-    [brk 51214a] args: 00060004 ... 05466972 7374    <- "First", resolved
-                                                        from the MENU resource
+- **The card list is built.** With the real Home open, HyperCard reads `MAST`
+  (0x1800), `LIST` (0x1a00), `PAGE` (0x1a80) and the `CARD` blocks themselves
+  -- `CARD 5341` at 0x2b00, `CARD 3011` at 0x40c0 -- all at the right offsets
+  and full length. The stack header says five cards and first card id 5341,
+  and that is what it reads.
+- **The renderer runs, hard.** `fn_16_402e` is entered **41,896** times and
+  the WOBA expander `fn_21_59e2` fourteen times in a hundred seconds. This is
+  not a title sitting idle.
+- **What it renders is an empty window.** The expander's output buffer
+  (`a5-0x1314` = 0x843da0) holds a correct, full-width **512x342 window frame**
+  -- title bar, border, drop shadow, empty interior. Geometry right, content
+  absent.
+- **The blit to the screen truncates every row.** Guest screen memory
+  (0x800100, rowBytes 64) receives that frame only **344 pixels wide** -- 43
+  bytes, which is `342/8` rounded up, i.e. a rowBytes computed from the screen
+  *height*. `ScreenRow` (0x106) is 64 and nothing overwrites it; the QuickDraw
+  port is set up with the right bounds; the dirty rect at `a5-0x1d0a` reads
+  (0,0,0,0). Where the 43 comes from is not yet found, and it is the most
+  self-contained defect left.
 
-`fn_1_214a` runs with the right menu and item, the item's name resolves, and
-`a5-0x2396` stays null. So HyperCard is not refusing to navigate for want of a
-command -- it behaves as though the open stack has no cards to navigate to.
-The next thread is therefore one level further back: whether the stack's card
-list (`MAST`/`LIST`/`PAGE`) is being built at all after the file is read.
+Dump either side with `MRBMSHOT=843da0:64:342:buf.pgm` (the buffer, correct)
+and `MRBMSHOT=800100:64:342:scr.pgm` (the screen, truncated).
 
 Knobs added along the way: `MRJT=<hex a5off>` resolves a jump-table call to its
 target, `MRHOLD` sets how long a synthetic press is held, and `FindWindow` now

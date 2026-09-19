@@ -45,7 +45,9 @@ static uint32_t heap_alloc(uint32_t sz);
 static uint32_t g_screen_base;
 uint32_t mr_screen_base(void);
 static uint32_t screen_base(void){
-    if(!g_screen_base) g_screen_base = heap_alloc((uint32_t)QD_H * (QD_W/8));
+    if(!g_screen_base){ g_screen_base = heap_alloc((uint32_t)QD_H * (QD_W/8));
+        if(getenv("MRTRACE")) fprintf(stderr, "  screen base %06x, %d x %d, rowBytes %d\n",
+                                      g_screen_base, QD_W, QD_H, QD_W/8); }
     return g_screen_base;
 }
 /* The platform layer needs it too: a title that blits with its own code
