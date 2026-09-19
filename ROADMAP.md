@@ -285,6 +285,22 @@ HyperCard carries on idling quite happily (1.2 million traps after the click),
 so it has not crashed or hung; the `go` simply resolves to nothing and gives
 up without asking the file system anything.
 
+**And the reason it gives up: the destination record is empty.** Dumping the
+record `fn_21_04a6` is handed at the click (`MRBRK=6504a6
+MRBRKMEM=<record>:6`) gives all zeros -- no kind, and no name. The record
+begins with the destination's name as a Pascal string (`fn_21_3978` tests
+byte 0 as a length and compares the whole thing against `a5-0x9fe`, "is this
+the stack we are already in"), and for this click it should read
+`0b57686f 6c652045 61727468` = `Whole Earth`. It reads zero.
+
+So the `go` command executes with an **empty destination**. The stack name
+from the script never reaches the record, which is why the resolver answers
+false, why no file is ever opened, and why nothing is reported: there is
+nothing to report, HyperCard was asked to go nowhere. The fault is therefore
+in evaluating the `go` command's argument -- turning `stack "Whole Earth"`
+into a destination -- and not in the resolver, the file layer, or the
+navigator, all of which behave correctly given what they are handed.
+
 **Where the `go` gives up, named.** `fn_21_0fcc` reaches its general arm at
 `0x10e2` and calls `fn_21_04a6` -- the destination resolver -- at `0x1102`;
 a false answer there branches to `0x1268` and the `go` ends quietly, which is
