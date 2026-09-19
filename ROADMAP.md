@@ -371,97 +371,45 @@ compares the destination name against `a5-0x9fe` and answers "is this the
 stack we are already in". So the chain to read next is
 `fn_21_04a6 + 0x83a` onwards, with `MRBRK=6504a6`.
 
-**The name does reach HyperCard's interning code.** The descriptor's name is
-not stored as text but as a *reference*: field 88 of the 92-byte record
-(`-$4(a6)` in both `fn_12_11c2` and `fn_21_04a6`, which is inside the copied
-record). `fn_21_04a6` turns it back into text with `jt 0x1fba` before
-`fn_21_3978` looks at it.
+**The catalogue now opens.** Clicking the Whole Earth button on Home's first
+card runs its `on mouseUp`, and `go to stack "Whole Earth"` reaches the disc:
 
-Two differential measurements, with a click against without:
+    [File] Open 'Whole Earth' vRef=0 perm=3 -> Whole Earth
+    [File] Open 'Whole Earth' vRef=0 perm=1 -> Whole Earth
+    [File] OpenRF 'Whole Earth' -> refNum 20 (41445 bytes)
+    [File] Read Whole Earth req=1536 ... 23552 ... 512 ... 2048 ...
 
-- **`jt 0x1fb2` = `fn_20_2264` is called with the right name.** Its argument
-  points at `Whole Earth` -- `003ef756 ... 0b57686f 6c652045 61727468`,
-  and the breakpoint's own text probe prints `".Whole Earth..."`. So the
-  string literal survives the parse intact.
-- **`jt 0x1fba` is called with a null reference** on both click-only calls
-  (`args[0] = 00000000`), which is why the name it produces is empty and
-  `fn_21_3978` says "same stack".
+HyperCard reads its `STAK`, `MAST`, `LIST` and `PAGE` -- thirteen reads -- so
+the stack is genuinely open and parsed.
 
-`fn_20_2264` compares the name against `Home` at `seg20+0x233c`, builds a
-path if it differs, then interns two strings into tables at `a5-0xb14` and
-`a5-0xb18` -- looking up with `jt 0x1ab2`, inserting with `jt 0x1972` when
-absent -- and returns `(d7 << 16) | d6`, the two table indices packed. Both
-tables are live: the insert runs 52 times without a click and 56 with one.
+What fixed it was the HAL, not the lifter: **an OS trap must leave the
+condition codes set from D0**. HyperCard's string-table insert is
+`a024 _SetHandleSize` followed by `660c bne.b` past the append, and with stale
+flags that branch was a coin toss; when it went the wrong way the table grew
+and nothing was written to it. Stack names are interned into two such tables
+and the destination descriptor carries the pair of indices, so a failed insert
+produced a null reference and `fn_21_3978` concluded "this is the stack we are
+already in". Everything above it -- the parse, the message dispatch, the
+handler, the `go` command -- had been working the whole time.
 
-What is **not** yet established is whether `fn_20_2264` itself returns zero.
-The null seen at `jt 0x1fba` proves some descriptor's reference field is zero;
-it does not by itself prove it is the one this call built. That wants reading
-the return, not inferring it -- the mistake this file records twice already.
+**Two things still stop the card appearing.**
 
-**Both routes fail in the same place, and it is one defect.** The only three
-call sites of the Open glue (`jt 0x2a2` = `fn_1_4798`) are in `fn_21_1bec`
-(twice) and `fn_21_1e1e` (once). Measured:
+1. **A Pascal string is being read two bytes late.** After the open, HyperCard
+   tries `Open 'titled:'` and `Open 'Untitled:titled:'`, which fail. Renaming
+   the volume proves the shape exactly: with the volume called `ABCDEFGH` the
+   request becomes `'CDEFGH:'`. `	Untitled:` read from +2 gives length
+   `'n'` = 110 and text `titled:...`, which is why the `ParamText` for the
+   error runs off the end of the buffer and into the Home stack's script. The
+   volume name itself is written correctly by `put_pstr` (length byte then
+   characters) and the last call to supply it is `PBGetCatInfo` with a
+   negative `ioFDirIndex`.
+2. **A HyperTalk parse error on `end`.** The run finishes sitting in
+   `ModalDialog` with `DLOG 1684` and `STR# 1002`, `ParamText ^0 = "end"` --
+   `Can't understand what's after "end"`, the same family as the `if` error
+   that the CODE 12 boundary fixed.
 
-| | baseline | with the menu's Open Stack | with a click on the button |
-|---|---|---|---|
-| `jt 0x2a2` (the glue) | 2 | **2** | 2 |
-| `fn_21_1bec` | 2 | **2** | 2 |
-| `fn_21_1e1e` (stack opener) | 2 | **2** | 2 |
-
-Neither route ever reaches HyperCard's stack opener. `fn_21_1e1e` is called
-from `fn_21_04a6` at `0x055c` only when `d4` is non-zero at `0x0520`, and `d4`
-is the inverse of `fn_21_3978` -- which answers "same stack" when the
-destination name's length byte is zero. So in **both** cases the destination
-descriptor reaches the resolver with an empty name: the `go` command builds
-one from the parse pool, *File > Open Stack* builds one from the `SFReply`,
-and both come out nameless.
-
-That is a single defect with two symptoms, not two problems. Whatever
-populates a destination descriptor's name field is not doing it.
-
-**The same symptom appears on the other route in.** Driving *File > Open
-Stack...* through the menu gets as far as Standard File, which `MRDOC` answers
-with a well-formed `SFReply` -- `good`=1, type `STAK`, name `Whole Earth` --
-and HyperCard then resolves the volume with `PBGetCatInfo` and never opens
-that file either. Two independent paths reach "I have a stack name" and both
-stop there, which points at one routine: **open a stack by name**.
-
-**And the catalogue-as-Home build dies three statements into its own script.**
-Tracing the messages it dispatches before the assertion gives, in order:
-`openStack` three times (the chain), then `hide`, then `put` -- and then
-`ALRT 3003`, *"Unexpected error 69320382"*, and `ExitToShell`. The catalogue's
-stack script begins:
-
-    on openStack
-      global curSnd, sndRefNum
-      hide menuBar          <- runs, low memory 0x0BAA is written
-      put 0 into sndRefNum  <- this is where it stops
-      put empty into curSnd
-    end openStack
-
-So `hide menuBar` succeeds and the *first* `put` into a **global** is what
-kills it. The assertion is `fn_9_1670` dispatching on the object-type byte
-`a5-0x49aa`, which handles only 1..4 -- in that build the byte reaches 5 and
-then 0, and a global variable is not an object at all, so 0 is what a
-container-resolution for a global would leave behind. In the real-Home build
-the same byte only ever takes 1,2,3,4 and no assertion fires, so this is
-specific to resolving that global, not to globals in general (Home's own
-`getHomeInfo` declares and uses them happily).
-
-That makes two separate faults, both now pinned to a statement:
-
-1. **real Home**: the button's script runs and `go to stack "Whole Earth"`
-   resolves to nothing without touching the file system.
-2. **catalogue as Home**: `put 0 into sndRefNum` in the catalogue's own
-   `openStack` trips HyperCard's assertion and it quits.
-
-Worth knowing for that hunt: the EWEC Home stack's search paths still name the
-authoring machine's volumes (`Lazarus:Stacks for B13.1`, `HyperCard
-Help:Help Stacks`), not this volume, which is called `Untitled`.
-
-Reproduce with `MRCLICK=244,100,300 MRKEYS=0` and
-`MRBRK=5e21c4 MRBRKMEM=3FB53C:3` to watch the messages go by; the message
-record is a token word at `a5-0x4ac4` followed by the name as a Pascal string.
+No card bitmap is ever read from the catalogue, which is consistent with
+HyperCard stopping before it displays a card.
 
 
 ### What "on screen and navigable" still needs
