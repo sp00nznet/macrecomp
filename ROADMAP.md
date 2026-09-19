@@ -401,45 +401,45 @@ compares the destination name against `a5-0x9fe` and answers "is this the
 stack we are already in". So the chain to read next is
 `fn_21_04a6 + 0x83a` onwards, with `MRBRK=6504a6`.
 
-**The catalogue now opens.** Clicking the Whole Earth button on Home's first
-card runs its `on mouseUp`, and `go to stack "Whole Earth"` reaches the disc:
+**The catalogue opens and draws.** Clicking the Whole Earth button on Home's
+first card runs its `on mouseUp`, `go to stack "Whole Earth"` reaches the disc,
+and the card is rendered:
 
-    [File] Open 'Whole Earth' vRef=0 perm=3 -> Whole Earth
-    [File] Open 'Whole Earth' vRef=0 perm=1 -> Whole Earth
+    [File] Open 'Whole Earth' -> Whole Earth
     [File] OpenRF 'Whole Earth' -> refNum 20 (41445 bytes)
-    [File] Read Whole Earth req=1536 ... 23552 ... 512 ... 2048 ...
+    19 block reads, including one of 7,456 bytes
 
-HyperCard reads its `STAK`, `MAST`, `LIST` and `PAGE` -- thirteen reads -- so
-the stack is genuinely open and parsed.
+Two HAL faults were behind it, both general rather than HyperCard-specific:
 
-What fixed it was the HAL, not the lifter: **an OS trap must leave the
-condition codes set from D0**. HyperCard's string-table insert is
-`a024 _SetHandleSize` followed by `660c bne.b` past the append, and with stale
-flags that branch was a coin toss; when it went the wrong way the table grew
-and nothing was written to it. Stack names are interned into two such tables
-and the destination descriptor carries the pair of indices, so a failed insert
-produced a null reference and `fn_21_3978` concluded "this is the stack we are
-already in". Everything above it -- the parse, the message dispatch, the
-handler, the `go` command -- had been working the whole time.
+1. **An OS trap must leave the condition codes set from D0.** HyperCard's
+   string-table insert is `a024 _SetHandleSize` then `660c bne.b` past the
+   append; with stale flags that branch was a coin toss, and a failed insert
+   left the table grown but empty. Stack names are interned into two such
+   tables and the destination descriptor carries the index pair, so the `go`
+   got a null reference and `fn_21_3978` concluded "already in this stack".
+2. **The Window Manager's low-level half was missing** -- `CalcVis`,
+   `CalcVBehind`, `ClipAbove`, `PaintOne`, `PaintBehind`, `SaveOld`, `DrawNew`
+   ($A909-$A90F). Falling through to the unimplemented-trap log meant their
+   arguments were never popped, four to eight bytes of rubbish per call, at
+   exactly the moment a new stack's window appears. With them in place the
+   block reads went from 13 to 19 and the card artwork reached the screen.
 
-**Two things still stop the card appearing.**
+**What is still wrong, in the order it matters:**
 
-1. **A Pascal string is being read two bytes late.** After the open, HyperCard
-   tries `Open 'titled:'` and `Open 'Untitled:titled:'`, which fail. Renaming
-   the volume proves the shape exactly: with the volume called `ABCDEFGH` the
-   request becomes `'CDEFGH:'`. `	Untitled:` read from +2 gives length
-   `'n'` = 110 and text `titled:...`, which is why the `ParamText` for the
-   error runs off the end of the buffer and into the Home stack's script. The
-   volume name itself is written correctly by `put_pstr` (length byte then
-   characters) and the last call to supply it is `PBGetCatInfo` with a
-   negative `ioFDirIndex`.
-2. **A HyperTalk parse error on `end`.** The run finishes sitting in
-   `ModalDialog` with `DLOG 1684` and `STR# 1002`, `ParamText ^0 = "end"` --
-   `Can't understand what's after "end"`, the same family as the `if` error
-   that the CODE 12 boundary fixed.
+- **The card stops at row 53 of 342.** The blit source (`a5-0x1318` =
+  0x84932c) holds 7,707 lit pixels across rows 0-52 and nothing below. This is
+  the oldest open bug in this file and it is now the thing between "some of the
+  catalogue is on screen" and "the catalogue is on screen".
+- **A script error still fires**, now `Can't understand what's after "pass"`
+  (`DLOG 1684`, `STR# 1002`) plus an `ALRT 3003` "Unexpected error 673082".
+  The catalogue's script uses `pass doMenu` and `pass idle`. The dialog draws
+  over rows 91-168 of the card.
+- **A chunk expression loses two characters.** The catalogue's script builds a
+  path from `the long name of this stack`; with the volume renamed `ABCDEFGH`
+  the request comes out `CDEFGH:`, i.e. `char 1 to i` returning `char 3 to i`.
 
-No card bitmap is ever read from the catalogue, which is consistent with
-HyperCard stopping before it displays a card.
+Ruled out for the script error: computed-jump entry points. `find_entries.py`
+reports none missing for either `4EFB` or `4EBB` after the 30 fixes.
 
 
 ### What "on screen and navigable" still needs
