@@ -37,6 +37,21 @@ RTS = b"\x4e\x75"
 
 CASES = [
     dict(
+        # A counted loop ends with `addq.w #1,<mem>` and `bvs` to leave on
+        # overflow. Setting V for an ordinary increment cuts the loop short --
+        # HyperCard decodes a 342-row bitmap with exactly this shape.
+        name="addq.w #1 on memory leaves V clear at 0x0069",
+        code=bytes.fromhex("5250") + bytes.fromhex("59c1") + RTS,  # addq.w #1,(a0) ; svs.b d1
+        setup="M.a[0]=0x1000; m68k_w16(0x1000,0x0069);",
+        checks=[("m68k_r16(0x1000)", 0x006A), ("DB(1)", 0x00), ("M.v", 0)],
+    ),
+    dict(
+        name="addq.w #1 on memory sets V only at 0x7fff",
+        code=bytes.fromhex("5250") + bytes.fromhex("59c1") + RTS,
+        setup="M.a[0]=0x1000; m68k_w16(0x1000,0x7FFF);",
+        checks=[("m68k_r16(0x1000)", 0x8000), ("DB(1)", 0xFF), ("M.v", 1)],
+    ),
+    dict(
         # The signed overflow case: 0x8000 - 1 is 0x7fff, which flips a negative
         # into a positive, so V is set. Every signed branch reads V, and a
         # recompiler that computes it from the result alone gets this wrong.

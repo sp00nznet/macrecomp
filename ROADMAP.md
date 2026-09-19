@@ -324,7 +324,18 @@ lifter and HAL from overfitting to one binary.
 
 HyperCard 1.2.2 opens the catalog's `WHOLE EARTH` stack and draws its Table of
 Contents card on screen: the globe, the heading, the "INTRODUCTION &" banner and
-the contents icons. The top of the card paints; the lower part does not yet.
+the contents icons. The top of the card paints; the lower part does not yet -- HyperCard's WOBA
+bitmap decoder stops after roughly 105 of 342 rows, although the composite and
+the expander are both handed the full card rect (0,0,342,512) and the block
+carries 14296 bytes of image data.
+
+Clicks reach the card. `MRCLICK=x,y[,n]` synthesises one, and a click on the
+first Table of Contents button (rect t=81 l=2 b=112 r=185) makes HyperCard
+search its stacks -- twenty names, NOMADICS through QUICK SEARCH -- so the
+button's script runs. It does not arrive: the catalog's own script fails to
+parse with `Can't understand what's after "if"`, which is the same shape as the
+`end` error fixed earlier in the lifter and probably has the same kind of
+cause.
 
 Two root causes had to be fixed before anything could appear:
 

@@ -153,6 +153,20 @@ int plat_next_event(int *what,int *msg,int *h,int *v){
         /* MRKEYS=1: answer modal dialogs with Return so an unattended run keeps
          * going. Off by default here -- with a window open there is a person to
          * click, and a synthetic keypress would fight them for the dialog. */
+        /* MRCLICK=x,y[,n]: synthesise a click at x,y after n polls (default
+         * 4000). Lets an unattended run exercise a title's own buttons, which
+         * is the only way to show that anything is actually navigable without
+         * a person at the window. */
+        {   static int cx=-1, cy, cwhen, fired; static long cpolls;
+            if(cx < 0){ const char *e=getenv("MRCLICK");
+                cx = 0; cwhen = 4000;
+                if(e) sscanf(e, "%d,%d,%d", &cx, &cy, &cwhen); }
+            if(cx > 0 && !fired && ++cpolls >= cwhen){
+                fired = 1;
+                evpush(1/*mouseDown*/, 0, cx, cy);
+                evpush(2/*mouseUp*/,   0, cx, cy);
+                fprintf(stderr, "[click] %d,%d\n", cx, cy);
+            } }
         static int on=-1; static long polls;
         if(on<0){ const char *e=getenv("MRKEYS"); on = e?atoi(e):0; }
         if(on && ++polls % 3000 == 0){
