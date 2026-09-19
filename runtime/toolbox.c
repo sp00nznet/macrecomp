@@ -1058,6 +1058,15 @@ void m68k_trap(uint16_t raw){
     case 0xA988: /*CautionAlert*/ {
         (void)pop32();                                  /* filterProc */
         int16_t id = pop16();
+        /* MRNODLG: a PROBE, not a fix. Answer an alert with its default item
+         * without drawing it. A title that reports a script error on every
+         * idle -- HyperCard does, once a handler ends in `pass` it cannot
+         * parse -- re-posts the dialog as fast as it is dismissed, and the
+         * card underneath can never be seen. This says whether the rest of
+         * the picture is right. */
+        if(getenv("MRNODLG")){
+            fprintf(stderr, "  [nodlg] ALRT %d answered 1\n", id);
+            ret16(1); break; }
         uint32_t alrth = res_get(0x414C5254u, id);      /* 'ALRT' */
         uint32_t alrt  = alrth ? m68k_r32(alrth) : 0;
         Rect b; int ditl_id = 0;

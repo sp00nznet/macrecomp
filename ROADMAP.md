@@ -426,6 +426,24 @@ Two HAL faults were behind it, both general rather than HyperCard-specific:
 
 **What is still wrong, in the order it matters:**
 
+**The error dialog is the only thing between here and the goal.** `MRNODLG`
+answers HyperCard's alerts with their default item without drawing them -- a
+probe, like `MRFORCEMODE`, not a fix. With it on, after the click:
+
+| | dialog drawn | dialog suppressed |
+|---|---|---|
+| lit pixels | 10,691 | **13,893** |
+| lowest row with ink | 305 | **336** |
+
+and the picture is a real card: letterforms, a framed box in the middle, the
+50% desktop dither around it. So **the catalogue's Table of Contents does
+render essentially full-screen** -- the row-53 figure below is the *blit
+source buffer*, not what reaches the framebuffer, and chasing it as "the
+truncation" was a wrong turn.
+
+What is left is one bug: the `pass` parse error, whose dialog is re-posted on
+every idle and paints over the card.
+
 - **The card stops at row 53 of 342, and the mechanism is now known.** The
   blit source (`a5-0x1318` = 0x84932c) holds 7,707 lit pixels across rows 0-52
   and nothing below. Both of the catalogue's `BMAP` blocks are read in full --
