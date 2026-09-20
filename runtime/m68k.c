@@ -400,7 +400,9 @@ void m68k_call(uint32_t addr) {
     if (!fn) { uint32_t t = via_jump_table(addr);
                if (t) { m68k_call(t); return; } }
     if (!fn) { fprintf(stderr, "m68k_call: no function at %06x (last %06x, before %06x, depth %d)\n",
-                       addr, g_last_call, g_prev_call, g_shadow_sp); return; }
+                       addr, g_last_call, g_prev_call, g_shadow_sp); for (int i = 0; i < g_shadow_sp && i < 40; i++)
+                   fprintf(stderr, "        [%d] %06x\n", i, g_shadow[i]);
+               return; }
     /* Saved and restored around the call: without the restore, "last function
      * entered" stays pointing at whatever was called *deepest*, so every trap
      * reported after a call returns names the wrong caller. That sends you
@@ -469,6 +471,20 @@ void m68k_call(uint32_t addr) {
         static int said2 = 0;
         if (!said2++) fprintf(stderr, "m68k: %06x left SP at %08x (was %08x) -- "
                                       "outside the address space\n", addr, SP, sp_in);
+    }
+    /* A callee pops the sentinel return address and, in Pascal, its own
+     * arguments -- so SP always comes back at least four bytes higher than it
+     * went in. Lower means bytes were left on the stack, and that is the shape
+     * of every corruption chased in this repo: the leak walks the stack out
+     * from under an enclosing frame's saved registers, whose epilogue movem
+     * then restores neighbours instead. Naming the leaker beats bisecting the
+     * victim by hand, which is how the Pack6 one took a day. */
+    if (g_watch_a6 && !unwound && SP < sp_in + 4) {
+        static int nleak = 0;
+        if (nleak++ < 40)
+            fprintf(stderr, "m68k: %06x leaked %d byte(s) of stack "
+                            "(SP %06x -> %06x, entry %06x)\n",
+                    addr, (int)(sp_in + 4 - SP), sp_in, SP, entry);
     }
     if (g_watch_a6) {
         static const char *nm[8] = {"d3","d4","d5","d6","d7","a2","a3","a4"};

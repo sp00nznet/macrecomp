@@ -343,10 +343,46 @@ static uint32_t g_rand = 0x12345678u;    /* Random(): deterministic by design */
 #define LM_ROMBASE   0x02AE
 #define LM_SCRNBASE  0x0824
 #define LM_SCREENROW 0x0106   /* bytes per screen row */
+#define LM_JSWAPFONT 0x08E0   /* Font Manager's FMSwapFont vector */
 #define LM_SCRVRES   0x0102
 #define LM_SCRHRES   0x0104
 #define LM_MBARHEIGHT 0x0BAA
 #define LM_CURRENTA5 0x0904
+
+/* FMSwapFont, which the Font Manager publishes through the low-memory vector
+ * at $08E0 rather than a trap. Left null, `jsr (a0)` on it calls address zero:
+ * the call does nothing *and* pops none of its arguments, so four bytes stay on
+ * the stack. HyperCard's fn_17_1818 then restores its saved registers from the
+ * wrong slots and the HyperTalk it is compiling falls apart several frames
+ * later -- "Can't understand arguments to command put".
+ *
+ * ponytail: one fixed bitmap font, so the answer never varies; a real
+ * implementation would consult the FOND. Scaling is reported as 1:1, which is
+ * what the caller checks numer against denom to find out. */
+#define HAL_FMSWAPFONT 0x00F00000u
+static uint32_t g_fmout;
+static void hal_fmswapfont(uint32_t entry){
+    (void)entry;
+    /* m68k_call has already pushed its return sentinel, so the argument is
+     * under it -- lift it out of the way rather than popping the sentinel. */
+    uint32_t ret = pop32();
+    uint32_t in = pop32();                 /* FMInput* */
+    if(!g_fmout) g_fmout = heap_alloc(26); /* FMOutput */
+    uint32_t o = g_fmout;
+    for(int i = 0; i < 26; i++) m68k_w8(o+i, 0);
+    m68k_w16(o + 0, 0);                    /* errNum  */
+    m68k_w32(o + 2, 0);                    /* fontHandle: we draw our own font */
+    m68k_w8 (o + 13, 9);                   /* ascent  */
+    m68k_w8 (o + 14, 3);                   /* descent */
+    m68k_w8 (o + 15, (uint8_t)qd_text_width(1));  /* widMax */
+    m68k_w8 (o + 16, 1);                   /* leading */
+    m68k_w8 (o + 17, in ? (uint8_t)m68k_r8(in + 4) : 0);  /* curStyle <- face */
+    m68k_w32(o + 18, 0x00010001u);         /* numer 1:1 */
+    m68k_w32(o + 22, 0x00010001u);         /* denom 1:1 -- unscaled */
+    ret32(o);                              /* into the caller's result slot */
+    SP -= 4; m68k_w32(SP, ret);
+    m68k_rts();
+}
 
 static void lowmem_init(void){
     uint32_t rom = heap_alloc(256);          /* a stand-in ROM header */
@@ -365,6 +401,8 @@ static void lowmem_init(void){
     m68k_w16(LM_MBARHEIGHT, 20);
     m68k_w32(LM_TICKS, 0);
     m68k_w32(LM_CURRENTA5, M.a[5]);
+    m68k_register(HAL_FMSWAPFONT, HAL_FMSWAPFONT + 2, hal_fmswapfont);
+    m68k_w32(LM_JSWAPFONT, HAL_FMSWAPFONT);
 }
 
 static int g_inited = 0;

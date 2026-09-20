@@ -8,6 +8,48 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **`FMSwapFont` was a null pointer, and calling it corrupted the parser.**
+  The Font Manager publishes it through the low-memory vector at `$08E0`
+  rather than a trap, and nothing was ever written there. `jsr (a0)` on zero
+  does nothing *and* pops none of its arguments, so `fn_17_1818` lost four
+  bytes per call, restored A3, A4 and D4-D7 from the wrong slots at its
+  epilogue, and took the HyperTalk it was compiling with it. The vector now
+  points at a HAL routine that fills an FMOutput and reports the font
+  unscaled (1:1), which is what the caller compares numer against denom to
+  learn. `fn_17_1818`'s frame balances exactly again (`sp-a6` back to -52).
+
+  With it in place the catalog's section cards draw their *contents* -- the
+  HEALTH card lists Nutrition, Cooking, Joy of Cooking, The New Laurel's
+  Kitchen and the rest -- where before they were empty frames.
+
+### Added
+
+- **A stack-leak detector, `MRWATCH`.** A callee pops the sentinel return
+  address and, in Pascal, its own arguments, so SP always comes back at least
+  four bytes higher than it went in. Lower means bytes were left behind, and
+  that is the shape of every corruption chased in this repo: the leak walks
+  the stack out from under an enclosing frame's saved registers, whose
+  epilogue `movem` then restores neighbours instead. It names the leaker
+  directly; bisecting the victim by hand is what made the Pack6 one take a
+  day. A call to a null address now prints its whole call chain too.
+
+### Known
+
+- A card deeper in still fails with `Can't understand arguments to command
+  put`. The argument parser consumes the line cleanly -- the leftover buffer
+  is empty -- so this one is not a leak: CODE 14 `0x1d9e` builds a Boolean
+  from comparisons of D7 against `a5-0x651e`, `-0x651c` and `-0x651a` and
+  branches to the error when it comes out false. Different mechanism,
+  unfinished.
+- `fn_1_4e98` still leaks 2 bytes once at startup (the `$AC14` auto-pop form
+  of `SetFractEnable`). `$A8B5 ScriptUtil` and `$A0FC vCheckLoad` remain
+  unimplemented.
+- Text measurement is approximate: the HEALTH card wraps "Basics" one
+  character early. The FMOutput widMax is a stand-in for one fixed font.
+
+
+### Fixed
+
 - **The catalog is navigable: `pass idle` compiles, and clicking a card's
   buttons moves between cards.** The cause was not in the parser at all. An
   unimplemented Toolbox trap does not pop its arguments, and Pack6's auto-pop
