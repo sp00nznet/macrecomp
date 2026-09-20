@@ -1753,6 +1753,11 @@ void m68k_trap(uint16_t raw){
                     if(ca>='A'&&ca<='Z') ca += 32;
                     if(cb>='A'&&cb<='Z') cb += 32; }
                 if(ca != cb){ r = ca < cb ? -1 : 1; break; } }
+            if(getenv("MRIU")){ fprintf(stderr,"[iu%u] ", sel);
+                for(int i=0;i<alen&&i<40;i++) fputc(m68k_r8(ap+i),stderr);
+                fprintf(stderr," vs ");
+                for(int i=0;i<blen&&i<40;i++) fputc(m68k_r8(bp+i),stderr);
+                fprintf(stderr," -> %d\n", r); }
             ret16((uint16_t)(int16_t)r);
         }
         /* Put the return address back: the lifted auto-pop form does an rts
