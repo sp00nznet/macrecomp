@@ -8,6 +8,45 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **The catalog is navigable: `pass idle` compiles, and clicking a card's
+  buttons moves between cards.** The cause was not in the parser at all. An
+  unimplemented Toolbox trap does not pop its arguments, and Pack6's auto-pop
+  glue form (`$ADED`, reached from HyperCard's `fn_1_4d56`) left **14 bytes**
+  on the guest stack per call. That walked `fn_11_013e`'s stack pointer out
+  from under the registers it had saved, so its epilogue `movem` restored A3
+  from the wrong slots; `fn_14_21c4` then wrote `A3-0x54` into HyperCard's
+  current-handler global `a5-0x57f0`, which ended up pointing into a dead
+  frame. `fn_10_0a8c` -- which enforces the rule that the word after `pass`
+  names the enclosing handler -- read a meaningless descriptor from it,
+  `getName` handed back a Pascal string of length `0xff`, the comparison
+  against a perfectly good `idle` failed, and STR# 1002 item 53 stopped the
+  session behind a modal alert.
+
+  `IUMagString`/`IUMagIDString` are now implemented and the frame balances
+  exactly (`sp-a6` back to -574). The error is gone and the run navigates
+  Home -> the catalog's table of contents -> its section index.
+
+- **`GetTrapAddress` claimed every trap exists.** The Mac way to ask whether a
+  machine has a trap is to compare its address with `_Unimplemented`'s;
+  handing back a distinct address for all 4096 answers "yes" to every one, so
+  HyperCard called `AUXDispatch` -- A/UX only -- and lost six more bytes. Traps
+  the HAL does not have are now named and reported absent.
+
+- **`DrawText`, `GetFontInfo`, `GetIcon` and `ShieldCursor` were unimplemented**,
+  so they leaked their arguments too. `DrawText` now draws, which is why the
+  catalog's section index renders its button text.
+
+### Known
+
+- A card deeper in still fails with `Can't understand arguments to command put`,
+  and `fn_17_1818` loses its saved registers the same way. `$A8B5 ScriptUtil`
+  and `$A0FC vCheckLoad` remain unimplemented. Pack6's non-comparison
+  selectors are still unhandled; guessing their argument sizes made the drift
+  worse, so they are left logged rather than guessed at.
+
+
+### Fixed
+
 - **257 branches to odd addresses, across 75 functions, were being lifted as
   code.** A 68000 fetches on word boundaries, so every `bra`/`bsr`/`jsr`/`jmp`
   target inside a segment is even. capstone will still decode a desynced

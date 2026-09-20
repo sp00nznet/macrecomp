@@ -491,7 +491,7 @@ static void mr_text_probe(const char *tag){
 static unsigned long g_trapn[4096];
 static void trap_hist(void){
     fprintf(stderr, "[traps] busiest:\n");
-    for(int k = 0; k < 15; k++){
+    for(int k = 0; k < 4096; k++){
         int best = -1;
         for(int i = 0; i < 4096; i++) if(g_trapn[i] && (best < 0 || g_trapn[i] > g_trapn[best])) best = i;
         if(best < 0) return;
@@ -671,6 +671,24 @@ void m68k_trap(uint16_t raw){
          * framebuffer is a great deal harder than reading it here. */
         if(getenv("MRTEXT")){ buf[len]=0; fprintf(stderr, "[text] %.*s\n", len, buf); }
         qd_draw_text(buf,len); } break;
+    /* An unimplemented Toolbox trap is not free: its arguments stay on the
+     * guest stack. A few bytes lost per call walk the stack pointer away from
+     * where the enclosing function saved its registers, so its epilogue movem
+     * restores neighbouring words instead -- which is how A3 came back holding
+     * a pointer into a dead frame and HyperCard could not compile `pass`. */
+    case 0xA885: /*DrawText*/ { int cnt=(int16_t)pop16(), first=(int16_t)pop16();
+        uint32_t buf=pop32();
+        if(cnt<0) cnt=0; if(cnt>255) cnt=255;
+        uint8_t t[256];
+        for(int i=0;i<cnt;i++) t[i]=(uint8_t)m68k_r8(buf+(uint32_t)first+i);
+        if(getenv("MRTEXT")) fprintf(stderr, "[text] %.*s\n", cnt, t);
+        qd_draw_text(t,cnt); } break;
+    case 0xA88B: /*GetFontInfo*/ { uint32_t info=pop32();
+        /* ascent, descent, widMax, leading -- the 1-bit system font we draw. */
+        if(info){ m68k_w16(info,   9); m68k_w16(info+2, 3);
+                  m68k_w16(info+4, qd_text_width(1)); m68k_w16(info+6, 1); } } break;
+    case 0xA9BB: /*GetIcon*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x49434F4Eu/*ICON*/, id)); } break;
+    case 0xA855: /*ShieldCursor*/ (void)pop32(); (void)pop32(); break;
     case 0xA883: /*DrawChar*/  { int c=pop16();
         if(getenv("MRGFX")){ int ph,pv; qd_get_pen(&ph,&pv);
             fprintf(stderr,"[gfx] DrawChar '%c' at %d,%d\n", (c>=32&&c<127)?c:46, ph, pv); }
@@ -1639,9 +1657,72 @@ void m68k_trap(uint16_t raw){
      * must not use. */
     case 0xA146: /*GetTrapAddress*/ case 0xA346: /*GetOSTrapAddress*/ {
         uint16_t t = (uint16_t)(M.d[0] & 0x0FFF);
-        M.a[0] = (t == 0x89F || t == 0x09F) ? 0x40000000u : (0x40000000u | t);
+        /* The Mac way to ask "does this machine have that trap?" is to compare
+         * its address against _Unimplemented's. Handing back a distinct address
+         * for every trap answers "yes" to all of them, so a title happily calls
+         * things this HAL has never heard of. That is not merely a missing
+         * feature: an unimplemented Toolbox trap does not pop its arguments, so
+         * each such call walks the guest stack a few bytes out of place until a
+         * function's epilogue restores its saved registers from the wrong slots.
+         * HyperCard asks about AUXDispatch, gets "yes", calls it, and loses six
+         * bytes -- which is how A3 came back pointing into a dead frame and
+         * `pass idle` could no longer be compiled.
+         *
+         * So: name the traps we do not have, and report them absent. A trap
+         * added to the switch above comes off this list. */
+        static const uint16_t absent[] = {
+            0xBF9,   /* AUXDispatch  -- A/UX only */
+            0x8B5,   /* ScriptUtil   -- Script Manager */
+            0x1AD,   /* Gestalt */
+            0x1AE,   /* NewGestalt */
+        };
+        int have = 1;
+        for (unsigned i = 0; i < sizeof absent / sizeof *absent; i++)
+            if (absent[i] == t) { have = 0; break; }
+        M.a[0] = (have && t != 0x89F && t != 0x09F) ? (0x40000000u | t) : 0x40000000u;
         M.d[0] = 0;
     } break;
+    /* The package traps take a selector word pushed last. Leaving it -- and
+     * the arguments under it -- on the stack is not a harmless omission: the
+     * enclosing function's epilogue then restores its saved registers from the
+     * wrong slots. HyperCard's fn_1_4d56 loses 16 bytes this way, A3 comes back
+     * pointing into a dead frame, and the handler record it builds from A3 is
+     * the garbage that stops `pass idle` compiling.
+     *
+     * Only the SANE three are safe to do here: their selector is a word on the
+     * stack and nothing else is. Pack6's glue form ($ADED, auto-pop) pushes a
+     * selector plus arguments whose size depends on the call, and guessing it
+     * made the drift worse, so it stays unimplemented and logged. */
+    case 0xA9ED: { /*Pack6 IntlUtil*/
+        /* Reached through HyperCard's glue at CODE 1 0x4d56, which pops its own
+         * return address, reads the length byte off each Str255 (advancing the
+         * pointers it was handed), pushes lengths + selector, pushes the return
+         * address back and invokes the auto-pop form. So the package sees a
+         * full Pascal frame: result, aPtr, bPtr, aLen, bLen, selector, return.
+         * It has to clear all of it -- leaving 14 bytes behind is what walked
+         * fn_11_013e's stack out from under its saved A3. */
+        uint32_t ret = pop32();
+        uint16_t sel = pop16();
+        if(sel == 10 || sel == 12){       /* IUMagString / IUMagIDString */
+            int blen = (int)(int16_t)pop16(), alen = (int)(int16_t)pop16();
+            uint32_t bp = pop32(), ap = pop32();
+            if(alen < 0) alen = 0; if(blen < 0) blen = 0;
+            int r = 0;
+            for(int i = 0; ; i++){
+                if(i >= alen || i >= blen){ r = (alen==blen) ? 0 : (alen<blen ? -1 : 1); break; }
+                int ca = (int)m68k_r8(ap+i), cb = (int)m68k_r8(bp+i);
+                if(sel == 12){            /* IUMagIDString ignores case */
+                    if(ca>='A'&&ca<='Z') ca += 32;
+                    if(cb>='A'&&cb<='Z') cb += 32; }
+                if(ca != cb){ r = ca < cb ? -1 : 1; break; } }
+            ret16((uint16_t)(int16_t)r);
+        }
+        /* Put the return address back: the lifted auto-pop form does an rts
+         * straight after the trap, and that is what it pops. */
+        SP -= 4; m68k_w32(SP, ret);
+    } break;
+    case 0xA9EB: /*FP68K*/ case 0xA9EC: /*Elems68K*/ case 0xA9EE: /*DecStr68K*/
+        (void)pop16(); break;
     case 0xA047: /*SetTrapAddress*/ M.d[0]=0; break;
 
     default: logtrap(w); break;

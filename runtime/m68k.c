@@ -526,6 +526,12 @@ void m68k_jump(uint32_t addr) {
                if (t) { m68k_jump(t); return; } }
     if (!fn) { fprintf(stderr, "m68k_jump: no function at %06x (last %06x, before %06x, depth %d)\n",
                        addr, g_last_call, g_prev_call, g_shadow_sp); return; }
+    /* A tail jump is an entry too. Watching only m68k_call hides every
+     * function reached this way -- which is how a breakpoint on the writer
+     * of a bad value kept showing the wrong arguments. */
+    if (g_brk != 0xFFFFFFFFu && g_brk && addr == g_brk)
+        fprintf(stderr, "[brk %06x] via JUMP from %06x sp=%06x a3=%06x a4=%06x a6=%06x arg=%08x\n",
+                addr, g_last_call, SP, M.a[3], M.a[4], M.a[6], m68k_r32(SP));
     fn(entry);
 }
 
