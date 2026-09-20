@@ -6,6 +6,27 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Verified
+
+- **A second, unrelated HyperCard title runs.** Everything so far had been
+  measured against the one stack set the fixture shipped with, which cannot
+  tell "HyperCard works" from "HyperCard works on this disc". `John C. Dvorak`
+  (1990, a sound-button stack from archive.org, nothing to do with the Whole
+  Earth Catalog) opens through File > Open Stack and draws: its border art, its
+  text field, and all eight buttons. Clicking the home icon runs the stack's
+  own script and opens the Home stack, so scripts in a foreign stack dispatch
+  and navigate too.
+
+  The stack-format check works as well, which is the other half of the result.
+  Handed `The Oracle` -- format 10, written by HyperCard 2.x -- 1.2.2 opens both
+  forks, reads the header and refuses with its own message, `New file format
+  requires new version of HyperCard.` Most archived collections are format 10
+  for the same reason: HyperCard 2 converts a 1.x stack the first time it opens
+  one, so a 1.x stack only survives where nothing ever did.
+
+  Neither image is in the repo; both live under gitignored `work/corpus/`.
+
+
 ### Fixed
 
 - **`FMSwapFont` was a null pointer, and calling it corrupted the parser.**
