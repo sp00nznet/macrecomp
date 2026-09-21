@@ -27,9 +27,10 @@ It boots, runs the full Toolbox init sequence, loads its resources, and executes
 ~305 Toolbox calls. All 21 segments lift at 97-100% instruction coverage, and a
 whole run now hits only **2** unimplemented instructions.
 
-It does not currently render. It reaches the same depth it did when it was
-drawing an error dialog, but no longer takes the error path -- so nothing is
-drawn at all. The dialog was the only thing it ever displayed.
+It renders. It opens a stack, draws the card's artwork and its fields, runs the
+card's scripts, and follows a click to the next card. What is left is the WOBA
+bitmap expander, which stops about two thirds of the way down a card, and SANE.
+The rest of this section is the log of how it got there, oldest first.
 
 ### Entry-point dispatch (landed)
 
@@ -775,23 +776,19 @@ and that is where the same word acquires two different classes.
 
 ## The Electronic Whole Earth Catalog renders
 
-HyperCard 1.2.2 opens the catalog's `WHOLE EARTH` stack and draws its Table of
-Contents card on screen: the globe, the heading, the "INTRODUCTION &" banner and
-the contents icons. The top of the card paints; the lower part does not yet -- HyperCard's WOBA
-bitmap decoder stops after roughly 105 of 342 rows, although the composite and
-the expander are both handed the full card rect (0,0,342,512) and the block
-carries 14296 bytes of image data.
+HyperCard 1.2.2 opens the catalog's `WHOLE EARTH` stack, draws its Table of
+Contents card, and follows a click from there into a section stack and on to
+that section's own contents card, artwork included. What still does not paint is
+the bottom of a card: the WOBA expander stops around row 232 of 342, leaving a
+white band under the illustration.
 
-`MRCLICK=x,y[,n]` synthesises a click, and the first Table of Contents button
-is at rect t=81 l=2 b=112 r=185 (read out of the stack file). **No effect of
-that click has been demonstrated.** An earlier note here claimed the click made
-HyperCard search its stacks; it did not. That enumeration -- twenty names,
-NOMADICS through QUICK SEARCH -- happens at startup while HyperCard looks for
-its Home stack, and the count is identical with and without a click. Nor does
-the click reliably produce the `Can't understand what's after "if"` error: that
-appears intermittently in both cases, because `TickCount` is wired to real time
-and no two runs reach the same point. Anything measured across runs here needs
-repeating before it means anything.
+`MRCLICK=x,y[,n]` synthesises a click, and the Table of Contents buttons are
+read out of the stack file: the left column runs t=43,81,118,155,193,230,269
+over l=2 r=185, and the right column l=330 r=511. `MRCLICK=40,8,300;420,58,1200`
+opens the stack through the File menu and then clicks HEALTH, which is enough to
+show navigation without a person at the mouse. Note that `TickCount` is wired to
+real time, so no two runs reach the same point at the same trip count; anything
+measured across runs needs repeating before it means anything.
 
 The `if` error itself is traced.
 `fn_14_298e` raises it at `seg14+0x2b20`, where it loads the handle at
@@ -819,9 +816,10 @@ Two root causes had to be fixed before anything could appear:
 
 ## Where HyperCard 1.2.2 stops
 
-The HyperTalk parse error is fixed; HyperCard runs clean on the unmodified Home
-stack, executes scripts, draws to the screen through the message box, and
-navigates between cards. What it does not do is paint a card.
+Superseded: this section was written when no card painted, and the analysis
+below explains a composite that no longer behaves that way. It is kept because
+the trace of the render chain is still accurate about which routine is which.
+Cards paint; the open question is only why the WOBA expander stops short.
 
 The render chain is traced end to end and every link is confirmed to run by
 breakpoint count: the update handler, the paint dispatch, the renderer
