@@ -175,16 +175,23 @@ static uint32_t heap_alloc(uint32_t sz){
 static void hsz_set(uint32_t h, uint32_t sz);
 
 /* ---- Resource Manager: serve the app's own extracted resources ---- */
-typedef struct { int file; char type[6]; int id; const uint8_t *data; int len; uint32_t handle; } Res;
+typedef struct { int file; char type[6]; int id; const uint8_t *data; int len; uint32_t handle;
+                 const uint8_t *name; int namelen; } Res;
 static Res g_res[6000]; static int g_nres;
 static int g_curres = 1;                  /* 1 = the application's own fork */
 
-void res_add_file(int refnum, const char *type, int id, const uint8_t *data, int len){
+void res_add_file_named(int refnum, const char *type, int id,
+                        const uint8_t *data, int len,
+                        const uint8_t *name, int namelen){
     if(g_nres>=(int)(sizeof g_res/sizeof*g_res)) return;
     Res *r=&g_res[g_nres++]; int i=0;
     for(;i<5&&type[i];i++) r->type[i]=type[i];
     while(i>0&&r->type[i-1]==' ') i--;           /* strip trailing spaces */
     r->type[i]=0; r->file=refnum; r->id=id; r->data=data; r->len=len; r->handle=0;
+    r->name=name; r->namelen=namelen;
+}
+void res_add_file(int refnum, const char *type, int id, const uint8_t *data, int len){
+    res_add_file_named(refnum, type, id, data, len, 0, 0);
 }
 void res_add(const char *type, int id, const uint8_t *data, int len){
     res_add_file(1, type, id, data, len);
@@ -199,6 +206,19 @@ static void type4(uint32_t t, char *out){ /* 'PICT' long -> stripped string */
  * the Resource Manager's chain, shortened to the two links that exist here. A
  * stack's own icons and scripts must win over HyperCard's. */
 static void mr_text_probe(const char *tag);
+/* The half of res_get that turns a found resource into a handle. Named lookup
+ * needs exactly this and none of the id search around it. */
+static void hsz_set(uint32_t h, uint32_t sz);
+static uint32_t res_get_named(Res *r){
+    if(!r->handle){
+        uint32_t p = heap_alloc(r->len);
+        for(int k = 0; k < r->len; k++) M.mem[p+k] = r->data[k];
+        uint32_t h = heap_alloc(4); m68k_w32(h, p); r->handle = h;
+        hsz_set(h, (uint32_t)r->len);
+    }
+    return r->handle;
+}
+
 static uint32_t res_get(uint32_t typelong, int id){
     char want[5]; type4(typelong,want);
     /* HyperTalk syntax errors are STR# 1002. Probe here rather than at the
@@ -1292,7 +1312,38 @@ void m68k_trap(uint16_t raw){
          * closer to the parser, where its cursor is still on the stack. */
         if(getenv("MRPARSE") && ty==0x53545223u && id==1002) mr_text_probe("STR#1002");
         m68k_w32(SP, res_get(ty,id)); } break;
-    case 0xA9A1: /*GetNamedResource*/ { (void)pop32(); (void)pop32(); m68k_w32(SP,0); } break;
+    /* GetNamedResource(theType, name): Handle. Externals -- XFCN and XCMD --
+     * are only ever found this way, and a stub that answers NULL tells a title
+     * that none of them exist. HyperCard then reads `accUpdate( 4, ... )` as a
+     * variable rather than a call, stops dead at the '(' and reports
+     * "Can't understand arguments to command put". Case-insensitive, like the
+     * real Resource Manager; current file first, then the application's. */
+    case 0xA9A1: /*GetNamedResource*/ case 0xA820: { /*Get1NamedResource*/
+        uint32_t nm = pop32(), ty = pop32();
+        int one = (w == 0xA820);
+        char want[5]; type4(ty, want);
+        int nlen = nm ? (int)m68k_r8(nm) : 0;
+        uint32_t found = 0;
+        for(int pass = 0; pass < 2 && !found; pass++){
+            int wantfile = pass == 0 ? g_curres : 1;
+            if(pass == 1 && (one || g_curres == 1)) break;
+            for(int i = 0; i < g_nres && !found; i++){
+                Res *r = &g_res[i];
+                if(r->file != wantfile || !r->name || r->namelen != nlen) continue;
+                if(strcmp(r->type, want) != 0) continue;
+                int same = 1;
+                for(int k = 0; k < nlen; k++){
+                    int a = r->name[k], b = (int)m68k_r8(nm + 1 + k);
+                    if(a >= 'A' && a <= 'Z') a += 32;
+                    if(b >= 'A' && b <= 'Z') b += 32;
+                    if(a != b){ same = 0; break; } }
+                if(same) found = res_get_named(r);
+            }
+        }
+        if(getenv("MRTRACE")) fprintf(stderr, "  named '%s' %.*s -> %06x\n",
+            want, nlen, nlen ? (const char *)(M.mem + nm + 1) : "", found);
+        m68k_w32(SP, found);
+    } break;
     case 0xA9BC: /*GetPicture*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x50494354u,id)); } break; /*'PICT'*/
     case 0xA9BF: /*GetRMenu/GetMenu*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x4D454E55u,id)); } break; /*'MENU'*/
     case 0xA9BA: /*GetString*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x53545220u,id)); } break; /*'STR '*/
@@ -1322,16 +1373,19 @@ void m68k_trap(uint16_t raw){
             if(++n==ix && tp){ const char *t=g_res[i].type;
                 for(int k=0;k<4;k++) m68k_w8(tp+k, t[k]?(uint8_t)t[k]:' '); break; } }
         } break;
-    /* GetResInfo(theResource; VAR theID; VAR theType; VAR name). The name is
-     * whatever res_add was told, which is nothing today -- so it reports an
-     * empty Str255 rather than leaving the caller's buffer untouched, which
-     * would read as a stale name. */
+    /* GetResInfo(theResource; VAR theID; VAR theType; VAR name). The name now
+     * comes from the resource fork's name list, which parse_resfork reads. A
+     * title that enumerates a type and matches on the name -- how externals
+     * are found -- gets nowhere against an empty Str255. */
     case 0xA9A8: { /*GetResInfo*/
         uint32_t nm=pop32(), tp=pop32(), idp=pop32(), h=pop32();
         for(int i=0;i<g_nres;i++) if(g_res[i].handle==h && h){
             if(idp) m68k_w16(idp,(uint16_t)g_res[i].id);
             if(tp){ const char *t=g_res[i].type;
                 for(int k=0;k<4;k++) m68k_w8(tp+k, t[k]?(uint8_t)t[k]:' '); }
+            if(nm){ int L=g_res[i].namelen; if(L>255) L=255;
+                m68k_w8(nm, (uint8_t)L);
+                for(int k=0;k<L;k++) m68k_w8(nm+1+k, g_res[i].name[k]); }
             break; }
         if(nm) m68k_w8(nm,0); } break;
     case 0xA9A9: /*SetResInfo*/ (void)pop32(); (void)pop32(); (void)pop16(); break;

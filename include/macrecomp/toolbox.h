@@ -18,6 +18,13 @@ void res_add(const char *type, int id, const uint8_t *data, int len);  /* regist
  * document carries its own, and a title expects the one it just opened to be
  * searched first. refnum 1 is the application itself. */
 void res_add_file(int refnum, const char *type, int id, const uint8_t *data, int len);
+/* Same, carrying the resource's name. XFCNs and XCMDs are found by name,
+ * never by id, so a resource fork parsed without its name list is a fork
+ * whose externals do not exist. `name` points into caller-owned storage
+ * that must outlive the resource (the fork buffer does). */
+void res_add_file_named(int refnum, const char *type, int id,
+                        const uint8_t *data, int len,
+                        const uint8_t *name, int namelen);
 void res_use_file(int refnum);
 int  res_cur_file(void);
 

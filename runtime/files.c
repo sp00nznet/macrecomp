@@ -466,6 +466,10 @@ static void parse_resfork(int refnum, const uint8_t *b, uint32_t n){
     if(mapOff + 30 > n || mapOff + mapLen > n || dataOff > n) return;
 
     uint32_t typeListOff = mapOff + rd16(b, mapOff + 24);
+    /* The map's other list. Each reference entry carries an offset into it, or
+     * 0xFFFF for an unnamed resource; without it XFCN and XCMD cannot be found
+     * at all, since they are looked up by name and never by id. */
+    uint32_t nameListOff = mapOff + rd16(b, mapOff + 26);
     if(typeListOff + 2 > n) return;
     int nTypes = (int)rd16(b, typeListOff) + 1;
     int added = 0;
@@ -482,12 +486,18 @@ static void parse_resfork(int refnum, const uint8_t *b, uint32_t n){
             uint32_t re = refList + (uint32_t)r * 12;
             if(re + 12 > n) break;
             int id = (int)(int16_t)rd16(b, re);
+            uint32_t nameOff = rd16(b, re + 2);
+            const uint8_t *rname = 0; int rnamelen = 0;
+            if(nameOff != 0xFFFFu && nameListOff + nameOff < n){
+                const uint8_t *np = b + nameListOff + nameOff;
+                int nl = np[0];
+                if(nameListOff + nameOff + 1 + (uint32_t)nl <= n){ rname = np + 1; rnamelen = nl; } }
             uint32_t off = rd32(b, re + 4) & 0x00FFFFFFu;   /* attrs in the top byte */
             uint32_t d = dataOff + off;
             if(d + 4 > n) continue;
             uint32_t len = rd32(b, d);
             if(d + 4 + len > n || len > dataLen) continue;
-            res_add_file(refnum, type, id, b + d + 4, (int)len);
+            res_add_file_named(refnum, type, id, b + d + 4, (int)len, rname, rnamelen);
             added++;
         }
     }

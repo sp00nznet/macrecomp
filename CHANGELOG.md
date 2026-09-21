@@ -8,6 +8,38 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **Resource names were thrown away, so nothing could be found by name.**
+  `parse_resfork` read the type list and the reference list but never the name
+  list the references point into, and `GetNamedResource` was a stub that
+  returned NULL. Names are now carried on each resource and both
+  `GetNamedResource` and `Get1NamedResource` search by them,
+  case-insensitively, current file then application -- and `GetResInfo` hands
+  back the real name instead of an empty `Str255`. The catalog's stacks carry
+  36 named externals (`accUpdate`, `pullTabbedChunk`, `showHelp`, `popup`, …)
+  that were unreachable by name before this.
+
+### Investigated
+
+- **`Can't understand arguments to command put` is one line, and it is not a
+  resource problem.** The failing statement is
+  `put accUpdate( 4, indexFileName, dataFileName ) into updHandle`, in the
+  `loadAccUpdate` handler that `openStack` reaches through `initAccUpdate`.
+  The statement checker at CODE 14 `0x1d9a` wants end-of-line (token class 2)
+  and finds class 6 / kw 7 at source offset `0x6a2` -- the `(` directly after
+  `accUpdate`. So the expression parser read the name as a plain variable,
+  returned successfully, and left the cursor on the paren.
+
+  Ruled out: the XFCN is present and *is* found -- `res 'XFCN' 2001 (file 21)`
+  resolves at run time -- and `GetNamedResource` is never called at compile
+  time, so neither the fork parsing nor the named lookup above is what gates
+  it. The argument-list parser itself is fine and reachable: CODE 11 `0x1e02`
+  tests for `(`, parses an expression, and loops on commas exactly as it
+  should. What is still unknown is the test upstream of `fn_11_1d8c` that
+  decides an identifier is a function call, and why it says no here.
+
+
+### Fixed
+
 - **The font width table was never built, so every line broke after one
   character.** `FMSwapFont` leaves a pointer to the current font's width table
   in low memory at `$0B10`: 256 Fixed entries indexed by character code.
