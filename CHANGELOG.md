@@ -8,6 +8,22 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **Descenders had nowhere to go, so `g` was a `9`.** The glyph box was seven
+  rows and all of them sat above the baseline, so `g`, `p`, `q`, `y` and `j`
+  had their tails crammed in above it -- `g` came out very nearly identical to
+  `9`, which is why the catalog read "Cookin9", "De9eneration" and "Skyguide"
+  with a digit in it. Bit 7 of each column byte was unused; it is now the row
+  below the baseline, and those five glyphs are redrawn to use it.
+
+- **Mac Roman punctuation drew as nothing.** The font covers $20-$7E, and the
+  catalog is full of curly quotes and dashes above that, so "The New Laurel's
+  Kitchen" rendered as "Laurel s Kitchen" and "Earth's Sky" as "Earth s Sky".
+  Characters above $7E now fold to the nearest ASCII the font has: both curly
+  quote pairs, en and em dash, bullet, ellipsis and non-breaking space.
+
+
+### Fixed
+
 - **Resource names were thrown away, so nothing could be found by name.**
   `parse_resfork` read the type list and the reference list but never the name
   list the references point into, and `GetNamedResource` was a stub that

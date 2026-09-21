@@ -126,10 +126,23 @@ void qd_char_trace(int ch);
 void qd_draw_char(int c){
     c &= 0xFF;
     qd_char_trace(c);
+    /* Mac Roman above $7E, folded to the nearest ASCII the font has. The
+     * catalog is full of curly quotes and dashes; drawn as blanks they turn
+     * "The New Laurel's Kitchen" into "The New Laurel s Kitchen". */
+    switch(c){
+        case 0xD0: case 0xD1: c = '-';  break;   /* en dash, em dash */
+        case 0xD2: case 0xD3: c = '"';  break;   /* curly double quotes */
+        case 0xD4: case 0xD5: c = 0x27; break;  /* curly single quotes */
+        case 0xA5:            c = '*';  break;   /* bullet */
+        case 0xC9:            c = '.';  break;   /* ellipsis */
+        case 0xCA:            c = ' ';  break;   /* non-breaking space */
+        default: break;
+    }
     if(c >= FONT_FIRST && c <= FONT_LAST){
         const uint8_t *g = FONT5X7[c - FONT_FIRST];
+        /* Eight rows, not seven: bit 7 hangs below the baseline. */
         for(int col=0; col<FONT_COLS; col++)
-            for(int row=0; row<FONT_ROWS; row++)
+            for(int row=0; row<FONT_ROWS+1; row++)
                 if(g[col] & (1u << row)) put(pen_h+col, pen_v-FONT_ROWS+row, pen_black);
     }
     pen_h += GLYPH_W;
