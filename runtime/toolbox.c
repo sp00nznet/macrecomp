@@ -6,6 +6,7 @@
  * implemented; the rest log once so the boot trace is legible. */
 #include "macrecomp/m68k.h"
 #include "macrecomp/toolbox.h"
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -406,6 +407,7 @@ static uint32_t g_rand = 0x12345678u;    /* Random(): deterministic by design */
  * ROM85 and the ROM version word at ROMBase+8. */
 #define LM_MEMTOP    0x0108
 #define LM_TICKS     0x016A
+#define LM_TIME      0x020C   /* seconds since 1904-01-01, local */
 #define LM_ROM85     0x028E
 #define LM_ROMBASE   0x02AE
 #define LM_SCRNBASE  0x0824
@@ -466,6 +468,25 @@ static void hal_fmswapfont(uint32_t entry){
     m68k_rts();
 }
 
+/* The clock. Classic Mac code reads this straight out of low memory rather
+ * than through a trap -- HyperCard's Home stack does `put the time into card
+ * field "Time"` on every idle and never calls ReadDateTime -- so leaving it at
+ * zero shows 1904 and, worse, shows the *same* wrong time for ever. Seconds
+ * since 1904-01-01 local; the Unix epoch is 2082844800 seconds later. */
+#define MAC_EPOCH_DELTA 2082844800u
+static void time_refresh(void){
+    time_t now = time(0);
+    struct tm lt, ut;
+    { struct tm *p = localtime(&now); if(!p) return; lt = *p; }
+    { struct tm *p = gmtime(&now);    if(!p) return; ut = *p; }
+    /* mktime reads its argument as local time, so feeding it the UTC breakdown
+     * yields a value short by exactly the UTC offset. That difference is the
+     * offset, DST included, without needing a platform-specific timezone call. */
+    lt.tm_isdst = -1; ut.tm_isdst = -1;
+    long off = (long)difftime(mktime(&lt), mktime(&ut));
+    m68k_w32(LM_TIME, (uint32_t)(now + off) + MAC_EPOCH_DELTA);
+}
+
 static void lowmem_init(void){
     uint32_t rom = heap_alloc(256);          /* a stand-in ROM header */
     m68k_w16(LM_ROM85, 0x007F);              /* 128K ROM or later: high bit clear */
@@ -482,6 +503,7 @@ static void lowmem_init(void){
     m68k_w16(LM_SCRVRES, 72); m68k_w16(LM_SCRHRES, 72);
     m68k_w16(LM_MBARHEIGHT, 20);
     m68k_w32(LM_TICKS, 0);
+    time_refresh();
     m68k_w32(LM_CURRENTA5, M.a[5]);
     m68k_register(HAL_FMSWAPFONT, HAL_FMSWAPFONT + 2, hal_fmswapfont);
     m68k_w32(LM_JSWAPFONT, HAL_FMSWAPFONT);
@@ -733,7 +755,12 @@ void m68k_trap(uint16_t raw){
     case 0xA89C: /*PenMode*/ qd_pen_mode(pop16()); break;
     case 0xA89D: /*PenPat*/ (void)pop32(); qd_pen_pat_black(1); break;
     case 0xA887: /*TextFont*/ case 0xA888: /*TextFace*/ case 0xA88A: /*TextSize*/
-    case 0xA889: /*TextMode*/ (void)pop16(); break;
+        (void)pop16(); break;
+    /* TextMode decides whether a glyph paints its background. Discarding it
+     * leaves every draw an OR of black pixels, so redrawing text in place
+     * never erases what was there -- the Home stack's clock field, rewritten
+     * from `the time` on every idle, turns into overprinted mush. */
+    case 0xA889: /*TextMode*/ qd_text_mode((int16_t)pop16()); break;
 
     /* ---- QuickDraw: rect utilities ---- */
     case 0xA8A7: /*SetRect*/ { int16_t b=pop16(),r=pop16(),t=pop16(),l=pop16(); uint32_t rp=pop32();
@@ -815,7 +842,7 @@ void m68k_trap(uint16_t raw){
         qd_draw_char(c); } break;
 
     /* ---- events (thin) ---- */
-    case 0xA975: /*TickCount*/ ret32(plat_ticks()); break;
+    case 0xA975: /*TickCount*/ time_refresh(); ret32(plat_ticks()); break;
     case 0xA972: /*GetMouse*/ { uint32_t pt=pop32(); int h,v; plat_get_mouse(&h,&v);
         m68k_w16(pt,v); m68k_w16(pt+2,h); } break;
     case 0xA974: /*Button*/ retbool(plat_button()); break;
@@ -1862,7 +1889,31 @@ void m68k_trap(uint16_t raw){
         int autopop = (raw & 0x0400) != 0;   /* $ADED is the glue form */
         uint32_t ret = autopop ? pop32() : 0;
         uint16_t sel = pop16();
-        if(sel == 10 || sel == 12){       /* IUMagString / IUMagIDString */
+        if(getenv("MRIU")) fprintf(stderr, "[pack6] sel=%u autopop=%d  stack: %08x %08x %08x %08x\n", sel, autopop,
+            m68k_r32(SP), m68k_r32(SP+4), m68k_r32(SP+8), m68k_r32(SP+12));
+        if(sel == 2){                     /* IUTimeString */
+            /* Frame, read off a live call rather than assumed:
+             *   SP+0 result Str255*, SP+4 wantSeconds (Boolean word, high byte),
+             *   SP+6 dateTime (seconds since 1904-01-01, local).
+             * The Home stack writes `the time` into a card field on every idle,
+             * so with this unimplemented the field just goes blank. */
+            uint32_t res  = pop32();
+            int wantsecs  = (int)m68k_r8(SP); (void)pop16();
+            uint32_t when = pop32();
+            uint32_t sod  = when % 86400u;
+            int hh = (int)(sod / 3600u), mm = (int)((sod / 60u) % 60u),
+                ss = (int)(sod % 60u);
+            const char *ap = hh < 12 ? "AM" : "PM";
+            int h12 = hh % 12; if(!h12) h12 = 12;
+            char buf[32];
+            if(wantsecs) snprintf(buf, sizeof buf, "%d:%02d:%02d %s", h12, mm, ss, ap);
+            else         snprintf(buf, sizeof buf, "%d:%02d %s", h12, mm, ap);
+            if(res){ int n = (int)strlen(buf); if(n > 255) n = 255;
+                     m68k_w8(res, (uint8_t)n);
+                     for(int i = 0; i < n; i++) m68k_w8(res + 1 + i, (uint8_t)buf[i]); }
+            if(getenv("MRIU")) fprintf(stderr, "[iu2] %s\n", buf);
+        }
+        else if(sel == 10 || sel == 12){  /* IUMagString / IUMagIDString */
             int blen = (int)(int16_t)pop16(), alen = (int)(int16_t)pop16();
             uint32_t bp = pop32(), ap = pop32();
             if(alen < 0) alen = 0; if(blen < 0) blen = 0;

@@ -14,6 +14,7 @@ uint8_t qd_fb[QD_H][QD_W];
 static int pen_h, pen_v, pen_w = 1, pen_h_sz = 1;
 static int pen_black = 1;          /* current pen pattern: 1 black, 0 white */
 static int pen_mode = 0;           /* 0 = patCopy (srcCopy-ish) */
+static int txt_mode = 1;           /* srcOr: the default for a new port */
 static Rect clip = { 0, 0, QD_H, QD_W };
 
 /* current drawing target: the screen (qd_fb) or a 1-bit BitMap in guest memory.
@@ -72,6 +73,7 @@ void qd_set_clip(const Rect *r){ if(r) clip=*r; }
 void qd_get_clip(Rect *r){ if(r) *r=clip; }
 void qd_pen_size(int w, int h){ pen_w=w>0?w:1; pen_h_sz=h>0?h:1; }
 void qd_pen_mode(int mode){ pen_mode=mode; }
+void qd_text_mode(int mode){ txt_mode=mode; }
 void qd_pen_pat_black(int black){ pen_black=black?1:0; }
 void qd_pen_to(int h, int v){ pen_h=h; pen_v=v; }
 void qd_get_pen(int *h, int *v){ if(h)*h=pen_h; if(v)*v=pen_v; }
@@ -138,12 +140,21 @@ void qd_draw_char(int c){
         case 0xCA:            c = ' ';  break;   /* non-breaking space */
         default: break;
     }
+    /* srcCopy paints the whole cell, background included; srcOr and the rest
+     * only add ink. Without this, text redrawn in place accumulates. */
+    if(txt_mode == 0 /*srcCopy*/ || txt_mode == 4 /*notSrcCopy*/){
+        int bg = (txt_mode == 4);
+        for(int col=0; col<GLYPH_W; col++)
+            for(int row=0; row<FONT_ROWS+1; row++)
+                put(pen_h+col, pen_v-FONT_ROWS+row, bg);
+    }
     if(c >= FONT_FIRST && c <= FONT_LAST){
         const uint8_t *g = FONT5X7[c - FONT_FIRST];
         /* Eight rows, not seven: bit 7 hangs below the baseline. */
+        int ink = (txt_mode == 4) ? !pen_black : pen_black;
         for(int col=0; col<FONT_COLS; col++)
             for(int row=0; row<FONT_ROWS+1; row++)
-                if(g[col] & (1u << row)) put(pen_h+col, pen_v-FONT_ROWS+row, pen_black);
+                if(g[col] & (1u << row)) put(pen_h+col, pen_v-FONT_ROWS+row, ink);
     }
     pen_h += GLYPH_W;
 }
@@ -157,8 +168,10 @@ void qd_char_trace(int ch){
     static int on = -1;
     if(on < 0) on = getenv("MRCHARS") != 0;
     if(!on) return;
-    fprintf(stderr, "[ch] %3d,%3d %s %c\n", pen_h, pen_v,
-            cur.is_screen ? "scr" : "off", (ch >= 32 && ch < 127) ? ch : 46);
+    fprintf(stderr, "[ch] %3d,%3d %s clip=%d,%d,%d,%d %c\n", pen_h, pen_v,
+            cur.is_screen ? "scr" : "off",
+            clip.top, clip.left, clip.bottom, clip.right,
+            (ch >= 32 && ch < 127) ? ch : 46);
 }
 
 /* CopyBits: 1-bit source (row-padded to src_rowbytes) -> framebuffer, scaled by

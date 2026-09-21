@@ -6,6 +6,31 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`TextMode` was discarded, so text could never erase what it drew over.**
+  `$A889` popped its argument and threw it away, leaving every glyph an OR of
+  black pixels. srcCopy is meant to paint the whole cell, background included.
+  The Home stack rewrites `the time` into a card field on every idle, so the
+  clock accumulated into unreadable mush and flickered. Text mode is honoured
+  now, srcCopy and notSrcCopy both.
+
+- **There was no clock.** Classic Mac code reads the time straight out of low
+  memory at `$020C` rather than through a trap -- HyperCard never calls
+  `ReadDateTime` at all -- and nothing ever wrote it. Set at init and refreshed
+  from `TickCount`, in seconds since 1904-01-01 local. The UTC offset comes
+  from the difference between `mktime` of the local and UTC breakdowns, which
+  gets DST right without a platform timezone call.
+
+- **`IUTimeString` (Pack6 selector 2) was unimplemented**, which is what
+  `the time` actually goes through -- 4,577 calls in a single run, one per
+  idle. With it missing the field simply went blank. The frame was read off a
+  live call rather than assumed: result `Str255*` at SP+0, `wantSeconds`
+  Boolean word at SP+4, `dateTime` at SP+6, confirmed by the dateTime matching
+  the expected Mac seconds to within a second. The Home card's clock now reads
+  the real local time.
+
+
 ### Corrected
 
 - **The row-53 truncation was never a decoder bug.** `work/files/files.json`

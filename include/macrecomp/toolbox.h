@@ -48,6 +48,7 @@ void qd_line_to(int h, int v);
 void qd_line(int dh, int dv);
 void qd_pen_size(int w, int h);
 void qd_pen_mode(int mode);
+void qd_text_mode(int mode);   /* srcCopy paints the glyph's background */
 void qd_pen_pat_black(int black);       /* 1 = black pattern, 0 = white */
 void qd_frame_rect(const Rect *r);
 void qd_paint_rect(const Rect *r);      /* fill with pen pattern */
