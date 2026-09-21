@@ -728,6 +728,42 @@ partitioned Mac CD:
 Four HyperCard builds across both major generations, which is what keeps the
 lifter and HAL from overfitting to one binary.
 
+### The `put` parse failure, as far as it has been traced
+
+One statement stops a section stack from opening, and with it every deeper
+card, because the alert it raises is modal and the event loop stops behind it:
+
+```
+put accUpdate( 4, indexFileName, dataFileName ) into updHandle
+```
+
+in `loadAccUpdate`, which `openStack` reaches through `initAccUpdate`. The
+chain, all confirmed by measurement rather than reading:
+
+| where | what happens |
+|---|---|
+| tokenizer | `accUpdate` arrives as token **class 21** -- a plain word |
+| `fn_11_1d8c` | expression parser; dispatches class 2, 5, 6. 21 falls to the default |
+| `fn_11_1bf4` | primary parser; tests classes 4, 7, 8, 9, 22. Never 21 |
+| `fn_10_164c` | the class-21 fall-through: looks the name up as a local or global, correctly fails |
+| `fn_10_032c` | the next alternative: accepts only class **13** or **10**, so rejects it |
+| `fn_14_0x1d9a` | statement check wants end-of-line, finds class 6 kw 7 -- the `(` -- and raises STR# 1002 #93 |
+
+The parser backtracks along the way: the token index runs 0x10 -> 0x11 -> 0x10,
+so it reads `accUpdate`, tries an alternative, rewinds and gives up.
+
+Ruled out, each by measurement: the XFCN is present and does resolve
+(`res 'XFCN' 2001 (file 21)`); `GetNamedResource` is never called during
+compilation; the argument-list parser at CODE 11 `0x1e02` handles `(` and
+comma-separated arguments correctly and is reachable; and the statements that
+do parse (`put 0 into sndRefNum`) get there with a class-7 *numeric literal*,
+not a function name -- an earlier reading of that as evidence about function
+names was wrong.
+
+**The open question is narrow:** what makes the tokenizer give a name class 13
+or 10 rather than 21. That is how HyperCard marks a word as a known function,
+and `accUpdate` is not getting it.
+
 ## Out of scope
 
 - Shipping any Apple ROM, System software, or HyperCard binary. The tool ships;
