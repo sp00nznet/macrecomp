@@ -32,13 +32,16 @@ typedef struct { int16_t top, left, bottom, right; } Rect;   /* Mac field order 
 typedef struct { int16_t v, h; } Point;
 
 /* ---- QuickDraw (quickdraw.c) ---- */
+/* The fallback screen, used only when there is no guest memory to draw into.
+ * Read the screen with qd_screen_get, never this directly. */
 extern uint8_t qd_fb[QD_H][QD_W];       /* 1 byte/pixel, 0=white 1=black (simple) */
+int  qd_screen_get(int x, int y);
+void qd_screen_put(int x, int y, int black);
 void qd_init(void);
 void qd_pen_to(int h, int v);
 void qd_get_pen(int *h, int *v);
-/* Base of the 1-bit screen block in guest memory. QuickDraw draws into qd_fb,
- * but a title that blits with its own code writes here, so the presented frame
- * is the union of the two. */
+/* Base of the 1-bit screen block in guest memory: the framebuffer. QuickDraw
+ * and a title blitting with its own code both write here. */
 uint32_t mr_screen_base(void);
 /* Queue a synthetic click (MRCLICK); driven by the HAL's event loop. */
 void plat_inject_click(int x, int y);

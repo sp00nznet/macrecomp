@@ -40,8 +40,8 @@ static void wr_rect(uint32_t p,const Rect*r){ m68k_w16(p,r->top); m68k_w16(p+2,r
  * its port still points there compares a real pointer against 1 and concludes
  * the port has been redirected. HyperCard does exactly that and stops with
  * "Unexpected error 123452". So the screen gets a genuine block of guest memory,
- * sized like a real 1-bit screen; drawing still goes to qd_fb, the block exists
- * so that the address is a real one and comparisons against it hold. */
+ * sized like a real 1-bit screen, and QuickDraw draws straight into it -- it is
+ * the framebuffer, not just an address for comparisons to hold against. */
 static uint32_t heap_alloc(uint32_t sz);
 static uint32_t g_screen_base;
 uint32_t mr_screen_base(void);
@@ -52,7 +52,7 @@ static uint32_t screen_base(void){
     return g_screen_base;
 }
 /* The platform layer needs it too: a title that blits with its own code
- * writes into this block, not into qd_fb. */
+ * writes into this block, and so does QuickDraw. */
 uint32_t mr_screen_base(void){ return screen_base(); }
 static uint32_t g_front_win;   /* the one card window, for FindWindow */
 static int g_update_pending;   /* an updateEvt the app has not been given yet */
@@ -562,7 +562,7 @@ static void draw_pict(uint32_t pic, Rect dst){
                 else { for(int i=0;i<rowbytes;i++) row[i]=(uint8_t)m68k_r8(o+i); o+=rowbytes; }
                 int py=dst.top + y*dh/h;
                 for(int x=0;x<w;x++){ int bit=(row[x>>3]>>(7-(x&7)))&1;
-                    int px=dst.left + x*dw/w; if(px>=0&&px<QD_W&&py>=0&&py<QD_H) qd_fb[py][px]=bit; }
+                    int px=dst.left + x*dw/w; qd_screen_put(px, py, bit); }
             }
             return;                      /* one bitmap is the picture */
         }
@@ -795,10 +795,7 @@ void m68k_trap(uint16_t raw){
     case 0xA894: /*Move*/   { int16_t dv=pop16(),dh=pop16(); qd_pen_to(0,0); (void)dh;(void)dv; } break;
     case 0xA891: /*LineTo*/ { int16_t v=pop16(),h=pop16(); qd_line_to(h,v); } break;
     case 0xA892: /*Line*/   { int16_t dv=pop16(),dh=pop16(); qd_line(dh,dv); } break;
-    case 0xA8A1: /*FrameRect*/ { Rect r=rd_rect(pop32()); qd_frame_rect(&r);
-        if(getenv("MRGFX")) fprintf(stderr,"[gfx] FrameRect %d,%d,%d,%d
-",
-            r.top,r.left,r.bottom,r.right); } break;
+    case 0xA8A1: /*FrameRect*/ { Rect r=rd_rect(pop32()); qd_frame_rect(&r); } break;
     case 0xA8A2: /*PaintRect*/ { Rect r=rd_rect(pop32()); qd_paint_rect(&r); } break;
     case 0xA8A3: /*EraseRect*/ { if(getenv("MRGFX")){ Rect _c; qd_get_clip(&_c);
             uint32_t _rp=m68k_r32(SP); Rect _r=rd_rect(_rp);
@@ -1241,11 +1238,11 @@ void m68k_trap(uint16_t raw){
         if(sw>0&&sh>0&&dw>0&&dh>0){
             for(int y=0;y<dh;y++){ int sy=(s.top-sbt)+y*sh/dh;
                 for(int x=0;x<dw;x++){ int sx=(s.left-sbl)+x*sw/dw; int bit=0;
-                    if(src_screen){ int gx=sx+sbl,gy=sy+sbt; bit=(gx>=0&&gx<QD_W&&gy>=0&&gy<QD_H)?qd_fb[gy][gx]:0; }
+                    if(src_screen){ bit=qd_screen_get(sx+sbl, sy+sbt); }
                     else if(srb>0){ uint32_t a=sbase+(uint32_t)sy*srb+(sx>>3); bit=a<M.memsize?(m68k_r8(a)>>(7-(sx&7)))&1:0; }
                     if(inv) bit=!bit;
                     int dpx=d.left+x, dpy=d.top+y;
-                    if(dst_screen){ if(dpx>=0&&dpx<QD_W&&dpy>=0&&dpy<QD_H) qd_fb[dpy][dpx]=(uint8_t)bit; }
+                    if(dst_screen){ qd_screen_put(dpx, dpy, bit); }
                     else if(drb>0){ int dlx=dpx-dbl,dly=dpy-dbt; if(dlx>=0&&dly>=0){ uint32_t a=dbase+(uint32_t)dly*drb+(dlx>>3);
                         if(a<M.memsize){ uint8_t bb=m68k_r8(a),mk=0x80u>>(dlx&7); m68k_w8(a,bit?(bb|mk):(bb&(uint8_t)~mk)); } } }
                 } }

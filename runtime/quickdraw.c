@@ -11,6 +11,30 @@
 
 uint8_t qd_fb[QD_H][QD_W];
 
+/* The screen is the guest's own 1-bit screen block, and qd_fb is only the
+ * stand-in for when there is none (the HAL selftest draws before any guest
+ * memory exists). Keeping a private overlay that the presenter OR'd on top of
+ * guest memory meant QuickDraw could never erase anything: a title that blits
+ * its next screenful with its own code -- HyperCard painting the next card --
+ * left every icon, frame and field the previous card had drawn sitting on top
+ * of it. One buffer, so an erase erases. */
+int qd_screen_get(int x, int y){
+    if(x < 0 || x >= QD_W || y < 0 || y >= QD_H) return 0;
+    uint32_t base = M.mem ? mr_screen_base() : 0;
+    if(!base) return qd_fb[y][x];
+    uint32_t a = base + (uint32_t)y * (QD_W/8) + (uint32_t)(x >> 3);
+    return a < M.memsize ? (m68k_r8(a) >> (7 - (x & 7))) & 1 : 0;
+}
+void qd_screen_put(int x, int y, int black){
+    if(x < 0 || x >= QD_W || y < 0 || y >= QD_H) return;
+    uint32_t base = M.mem ? mr_screen_base() : 0;
+    if(!base){ qd_fb[y][x] = (uint8_t)(black != 0); return; }
+    uint32_t a = base + (uint32_t)y * (QD_W/8) + (uint32_t)(x >> 3);
+    if(a >= M.memsize) return;
+    uint8_t byte = (uint8_t)m68k_r8(a), mask = 0x80u >> (x & 7);
+    m68k_w8(a, black ? (byte | mask) : (byte & (uint8_t)~mask));
+}
+
 static int pen_h, pen_v, pen_w = 1, pen_h_sz = 1;
 static int pen_black = 1;          /* current pen pattern: 1 black, 0 white */
 static int pen_mode = 0;           /* 0 = patCopy (srcCopy-ish) */
@@ -41,8 +65,7 @@ static int off_ok(int lx, int ly){
 static void put(int h, int v, int black){
     if (h < clip.left || h >= clip.right || v < clip.top || v >= clip.bottom) return;
     if (cur.is_screen){
-        if (h < 0 || h >= QD_W || v < 0 || v >= QD_H) return;
-        qd_fb[v][h] = (uint8_t)black;
+        qd_screen_put(h, v, black);
     } else {                          /* packed 1-bit bitmap in M.mem (1 = black) */
         int lx = h - cur.bl, ly = v - cur.bt;
         if (!off_ok(lx, ly)) return;
@@ -52,10 +75,7 @@ static void put(int h, int v, int black){
     }
 }
 static int getpix(int h, int v){
-    if (cur.is_screen){
-        if (h < 0 || h >= QD_W || v < 0 || v >= QD_H) return 0;
-        return qd_fb[v][h];
-    }
+    if (cur.is_screen) return qd_screen_get(h, v);
     int lx = h - cur.bl, ly = v - cur.bt;
     if (!off_ok(lx, ly)) return 0;
     return (m68k_r8(cur.base + (uint32_t)ly*cur.rowbytes + (lx>>3)) >> (7-(lx&7))) & 1;

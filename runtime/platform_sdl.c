@@ -135,47 +135,13 @@ static void bmshot(void){
     remove(path); rename(tmp, path);
 }
 
-/* A pixel is set if QuickDraw drew it into qd_fb or the title blitted it
- * straight into screen memory. HyperCard paints its card with its own blitter,
- * so showing qd_fb alone leaves the card invisible however well it rendered. */
-static int screen_px(int x, int y){
-    if(qd_fb[y][x]) return 1;
-    uint32_t base = mr_screen_base();
-    if(!base) return 0;
-    uint32_t a = base + (uint32_t)y * (QD_W/8) + (uint32_t)(x >> 3);
-    return a < M.memsize ? (M.mem[a] >> (7 - (x & 7))) & 1 : 0;
-}
+/* QuickDraw and the title's own blitter now write the same bits, so the
+ * presented frame is just that block. */
+static int screen_px(int x, int y){ return qd_screen_get(x, y); }
 
-/* MRLAYERS=<prefix>: write the two halves of the composite separately.
- * QuickDraw draws fields and frames into qd_fb; the title blits its card art
- * straight into screen memory with its own blitter. If those two disagree
- * about the origin, art sits off from the frames around it and the composite
- * cannot show you which layer moved. */
-static void layers(void){
-    const char *pre = getenv("MRLAYERS");
-    if(!pre) return;
-    /* Two full PGMs per present starves the run; the last one written is the
-     * one that matters, so sample rather than stream. */
-    static long n; if(++n % 100) return;
-    uint32_t base = mr_screen_base();
-    for(int which = 0; which < 2; which++){
-        char path[300];
-        snprintf(path, sizeof path, "%s.%s.pgm", pre, which ? "guest" : "qd");
-        FILE *f = fopen(path, "wb");
-        if(!f) continue;
-        fprintf(f, "P5\n%d %d\n255\n", QD_W, QD_H);
-        for(int y = 0; y < QD_H; y++) for(int x = 0; x < QD_W; x++){
-            int bit;
-            if(!which) bit = qd_fb[y][x];
-            else { uint32_t a = base + (uint32_t)y*(QD_W/8) + (uint32_t)(x>>3);
-                   bit = (base && a < M.memsize) ? (M.mem[a] >> (7-(x&7))) & 1 : 0; }
-            fputc(bit ? 0 : 255, f); }
-        fclose(f);
-    }
-}
 
 void plat_present(void){
-    shot(); bmshot(); layers();
+    shot(); bmshot();
     if(!tex) return;
     uint32_t *px; int pitch;
     SDL_LockTexture(tex, NULL, (void**)&px, &pitch);

@@ -217,10 +217,9 @@ void dlg_set_bounds(uint32_t dlgptr, const Rect *b){
     d->bounds=*b; d->framed=1;
 }
 
-/* qd_fb is an overlay: a set pixel wins over the title's own screen memory,
- * so whatever a dialog painted there keeps hiding the card until it is
- * cleared. Erasing the rect is the restore -- a clear pixel falls through to
- * what the title drew underneath, which is still intact. */
+/* Nothing saves the bits under a dialog, so disposing one has to put
+ * something back. Erasing its rect leaves white, which the next update event
+ * repaints; leaving the dialog's own pixels there would keep hiding the card. */
 void dlg_dispose(uint32_t dlgptr){
     Dlg *d = find(dlgptr);
     if(!d) return;

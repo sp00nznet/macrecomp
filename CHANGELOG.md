@@ -8,6 +8,20 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **QuickDraw drew into a private overlay, so nothing it drew could ever be
+  erased.** `qd_fb` was a second framebuffer that the presenter OR'd on top of
+  the title's own screen memory, and a clear pixel in it was transparent rather
+  than white. HyperCard paints each card by blitting into screen memory with
+  its own code, which does not touch `qd_fb`, so every icon, frame and field
+  QuickDraw had drawn for the *previous* card stayed on screen on top of the
+  next one: the Home card's globe and its two arrows sat over every section
+  card, the globe landing next to an unrelated field frame -- which is what
+  "the logo is off-centre from its frame" and "the arrows overlap" both were.
+  The guest's 1-bit screen block is now the framebuffer and QuickDraw writes
+  straight into it, so there is one set of bits and an erase erases. `MRLAYERS`
+  went with it: it existed to show the two buffers disagreeing, and they can no
+  longer disagree.
+
 - **`GetResInfo` erased the name it had just written.** The match loop copied
   the resource's name into the caller's `Str255` and broke out; the line after
   the loop then set the length byte to zero unconditionally, which was meant to

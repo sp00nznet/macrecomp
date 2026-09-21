@@ -245,7 +245,7 @@ static void draw_scene(void){
 
     FILE *f=fopen("hal_out.pgm","wb");
     fprintf(f,"P5\n%d %d\n255\n",QD_W,QD_H);
-    for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) fputc(qd_fb[y][x]?0:255,f);
+    for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) fputc(qd_screen_get(x,y)?0:255,f);
     fclose(f);
 }
 
