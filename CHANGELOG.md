@@ -6,6 +6,30 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Corrected
+
+- **The row-53 truncation was never a decoder bug.** `work/files/files.json`
+  still carried the rename from the abandoned "serve the catalogue as Home"
+  experiment -- file 7 as `HomeOrig`, file 18 as `Home` -- so regenerating
+  `work/loader.c` handed HyperCard the catalogue where it expected its Home
+  stack and it drew 53 of 342 rows. Restoring the disc's own names (7 =
+  `Home`, 18 = `WHOLE EARTH`; `same_name` is case-insensitive) gives a full
+  342-row render.
+
+  The symptom is distinctive and worth recognising: the first screen shows the
+  catalogue's Table of Contents card -- two globes, "TABLE OF CONTENTS", the
+  top of "INTRODUCTION &" -- instead of "Home Card" with the Whole Earth
+  button. `make_loader.py` now warns when the rename is still in the manifest,
+  because regenerating the loader is what re-introduces it silently.
+
+  The roadmap's long WOBA analysis of this -- `fn_21_59e2`'s row loop, the
+  `-$181(a6)` skip flag, the consistency check at `0x5cc4` -- is removed. It
+  described that code accurately and explained the wrong thing, which is worse
+  than explaining nothing. An earlier note claiming the figure was a
+  blit-source artefact was also wrong. Both readings came from one frame
+  instead of a sequence.
+
+
 ### Fixed
 
 - **Descenders had nowhere to go, so `g` was a `9`.** The glyph box was seven

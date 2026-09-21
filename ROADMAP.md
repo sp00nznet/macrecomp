@@ -436,13 +436,15 @@ probe, like `MRFORCEMODE`, not a fix. With it on, after the click:
 | lowest row with ink | 305 | **336** |
 
 and the picture is a real card: letterforms, a framed box in the middle, the
-50% desktop dither around it. So **the catalogue's Table of Contents does
-render essentially full-screen** -- the row-53 figure below is the *blit
-source buffer*, not what reaches the framebuffer, and chasing it as "the
-truncation" was a wrong turn.
+50% desktop dither around it.
 
-What is left is one bug: the `pass` parse error, whose dialog is re-posted on
-every idle and paints over the card.
+**Both halves of that reading have since been corrected.** The `pass` error was
+not "re-posted on every idle" -- it fires once, and the dialog only looked
+persistent because nothing restored the pixels behind it. And the row-53 figure
+was not a blit-source artefact either: it was the catalogue being served as
+Home by a stale `files.json`, and it goes away with the disc's own names. Two
+wrong explanations for the same screenshot, both from reading one frame instead
+of a sequence.
 
 **What is known about it.** HyperTalk's keywords are `WTLK 4`: `do, else, end,
 exit, global, if, next, pass, repeat, return, send, then, ...` -- 40 words,
@@ -525,80 +527,22 @@ rather than chasing who writes `0x8001`.
 
 
 
-- **The card stops at row 53 of 342, and the mechanism is now known.** The
-  blit source (`a5-0x1318` = 0x84932c) holds 7,707 lit pixels across rows 0-52
-  and nothing below. Both of the catalogue's `BMAP` blocks are read in full --
-  `req=14368 got=14368` and `req=7456 got=7456`, matching their block sizes
-  exactly -- so the data is all there and the decoder is what stops.
+- **Superseded: the row-53 truncation was a misconfigured loader, not the WOBA
+  decoder.** `work/files/files.json` still carried the rename from the
+  abandoned "serve the catalogue as Home" experiment -- file 7 as `HomeOrig`,
+  file 18 as `Home` -- so regenerating `work/loader.c` handed HyperCard the
+  catalogue where it expected its Home stack, and it drew 53 of 342 rows.
+  Restoring the disc's own names (7 = `Home`, 18 = `WHOLE EARTH`) gives a full
+  342-row render immediately.
 
-  `fn_21_59e2` is the WOBA driver. Its row loop ends at `0x5d50`:
-  `moveq #$40,d0` (rowBytes 64, correct), advance the destination, `row++`,
-  loop while `row <= -$184(a6)`. Each row begins at `0x5afe` with
+  The long analysis that used to sit here -- `fn_21_59e2`'s row loop, the
+  `-$181(a6)` skip flag, the consistency check at `0x5cc4`, the byte-table
+  dispatch in `fn_18_1e00` -- was accurate about what that code does and wrong
+  about why the picture was short. It is removed rather than kept, because a
+  correct-looking explanation of a symptom that had another cause is worse than
+  no explanation. `make_loader.py` now prints a warning if the rename is still
+  in the manifest.
 
-      move.b -$181(a6), d0
-      bne.w  $5d0c              ; flag set -> skip this row entirely
-
-  and `-$181(a6)` is cleared **once, before the loop** (`0x5aea`) and set to 1
-  at `0x5c9a` and `0x5cd2` -- never cleared inside it. So the first row that
-  sets it silences every row after.
-
-  It is set right after `jt 0x1b2a`, which both sites call first and which
-  looks like the decoder's abort. The second site reaches it from an explicit
-  consistency check at `0x5cc4`: decode a row, then
-  `move.l -$26(a6),d0; sub.l a4,d0; cmp.l -$12(a6),d0; beq $5cda` -- the bytes
-  produced must equal the expected row length, or the decode is abandoned.
-
-  The row decoder itself is `jt 0x1cc2` = `fn_18_1e00`. Its loop is
-
-      1e18  move.b (a0)+, d0            ; opcode
-      1e1a  bmi.w  $1ed6                ; >= 0x80
-      1e1e  move.b $1e2a(pc, d0.w), d1  ; byte table -> copy count
-      1e22  and.w  d2, d0               ; d0 &= 0x0f
-      1e24  adda.w d0, a1               ; skip that many
-      1e26  jmp    $1e2a(pc, d1.w)      ; into the unrolled copy chain
-      ...
-      1eb8  cmpa.l a2, a1               ; a2 = row start + row width
-      1eba  bcs.w  $1e18                ; a1 < a2 -> next opcode
-
-  so the row ends when `a1` reaches `a2`, and overshooting it is exactly the
-  mismatch the caller rejects.
-
-  **Checked and correct, so none of this needs redoing:** the eight targets of
-  the byte table at `0x1e2a` are all decoded boundaries (note it is a *byte*
-  table -- `find_entries.py` only reads 16-bit ones, so it cannot see this
-  shape); `cmpa.l a2,a1` lifts to `fl_cmp(a2, a1, a1-a2, 4)`, the right operand
-  order, and `fl_sub`'s carry is the standard borrow, so `bcs` means `a1 < a2`
-  as it should; `lsl.b #3, d0` on the `>= 0xe0` arm masks to a byte
-  (`m68k_lsl` ANDs with the size mask) and `SET_DB` leaves the upper bits
-  alone, which `moveq #0,d0` had cleared -- so `adda.w d0,a1` advances by the
-  right amount; and the copy primitives' Duff's-device jump (`4efb 1002` at
-  `seg17+0x10aa`) lands on decoded boundaries too.
-
-  **The within-row opcode set, decoded from the table at `seg18+0x1e2a`.**
-  That table is 128 bytes of `0x8e,0x8c,...,0x80` in blocks of sixteen, and
-  the jump target is `0x1e2a + table[op]` into a chain of `move.b (a0)+,(a1)+`
-  ending at `0x1eb8`, so the count is `(0x8e - table[op]) / 2`. It works out
-  exactly as:
-
-  | opcode | meaning |
-  |---|---|
-  | `0x00-0x7f` | skip `op & 0x0f` bytes, then copy `op >> 4` |
-  | `0x80-0xbf` | end of row (`bra $1ebe`, return) |
-  | `0xc0-0xdf` | copy `op & 0x1f` bytes |
-  | `0xe0-0xff` | skip `(op & 0x1f) * 16` -- `lsl.b #3` then `adda.w d0,a1` **twice** |
-
-  A reference decoder built from this gets 342 rows out of `BMAP 4202` but
-  cannot be compared against the guest yet, because the row-to-row half --
-  XOR against the previous row, and the repeat counter at `-$152(a6)` -- lives
-  in `fn_21_59e2` and is not modelled. Finishing that model is the way to get
-  ground truth for which row first disagrees.
-
-  The card being drawn is the right one: after the open, `a5-0x9d2` goes
-  `0xed5` (card 3797, the intro) then `0xafa` (**card 2810, the Table of
-  Contents**), so the catalogue's own `on openCard / go to card "theContents"`
-  runs and navigates. The 14 KB `BMAP 4202` is that card's.
-
-  What is left is the opcode handling in `fn_21_59e2` itself
 - **A script error still fires**, now `Can't understand what's after "pass"`
   (`DLOG 1684`, `STR# 1002`) with an `ALRT 3003` "Unexpected error 673082"
   behind it. **This is the thing to fix next**, because the catalogue's
