@@ -704,6 +704,36 @@ do parse (`put 0 into sndRefNum`) get there with a class-7 *numeric literal*,
 not a function name -- an earlier reading of that as evidence about function
 names was wrong.
 
+**The chain now ends at the handler lookup, and two earlier readings of it
+were wrong.** Corrected by dumping the handler's whole token array rather than
+sampling it:
+
+| token | class | kw | what |
+|---|---|---|---|
+| 15 | 18 | 33 | `put` |
+| 16 | 21 | 0 | `accUpdate` |
+| 17 | 6 | 7 | `(` |
+| 18 | 7 | 0 | `4` |
+| 19 | 6 | 3 | `,` |
+| 23 | 6 | **10** | `)` |
+
+So **kw 10 is the closing paren, not a comma** -- which means the CODE 11 loop
+at `0x1e06` that I described as "the argument-list parser, handles `(` and
+commas correctly" is nothing of the sort. It parses `( expr )` grouping. Class
+21 is also *correct* for `accUpdate`: a word absent from the WTLK 4 vocabulary
+gets class 21 and its length, and a stack's XFCN is not in that vocabulary.
+
+The real call parser is **`fn_11_1a10`**: it advances past the name, checks for
+`(` (class 6, kw 7), and asks `a5+0x148a` = **`fn_14_298e`**, HyperCard's
+handler dispatch, whether anything of that name exists. It *is* reached for
+`accUpdate` and that lookup answers no. `a5-0x57f0` is sound here -- it holds
+the `loadAccUpdate` name token -- so this is not the fault that broke `pass`.
+
+**Next: why `fn_14_298e` fails to find `accUpdate`.** The resource is present
+and enumerated with its correct name *before* the handler is tokenised
+(`resinfo XFCN 2001 'accUpdate'` precedes the token dump), so the question is
+what that dispatch consults and why the external is not in it.
+
 **What the class depends on is not the name.** `accUpdate` is tokenized *both
 ways inside the same script*:
 
