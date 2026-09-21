@@ -344,6 +344,7 @@ static uint32_t g_rand = 0x12345678u;    /* Random(): deterministic by design */
 #define LM_SCRNBASE  0x0824
 #define LM_SCREENROW 0x0106   /* bytes per screen row */
 #define LM_JSWAPFONT 0x08E0   /* Font Manager's FMSwapFont vector */
+#define LM_WIDTHPTR  0x0B10   /* -> the current font's width table */
 #define LM_SCRVRES   0x0102
 #define LM_SCRHRES   0x0104
 #define LM_MBARHEIGHT 0x0BAA
@@ -360,7 +361,7 @@ static uint32_t g_rand = 0x12345678u;    /* Random(): deterministic by design */
  * implementation would consult the FOND. Scaling is reported as 1:1, which is
  * what the caller checks numer against denom to find out. */
 #define HAL_FMSWAPFONT 0x00F00000u
-static uint32_t g_fmout;
+static uint32_t g_fmout, g_widths;
 static void hal_fmswapfont(uint32_t entry){
     (void)entry;
     /* m68k_call has already pushed its return sentinel, so the argument is
@@ -379,6 +380,20 @@ static void hal_fmswapfont(uint32_t entry){
     m68k_w8 (o + 17, in ? (uint8_t)m68k_r8(in + 4) : 0);  /* curStyle <- face */
     m68k_w32(o + 18, 0x00010001u);         /* numer 1:1 */
     m68k_w32(o + 22, 0x00010001u);         /* denom 1:1 -- unscaled */
+    /* And the part that is not in the record: FMSwapFont leaves a pointer to
+     * the current font's width table in low memory at $0B10, as 256 Fixed
+     * entries indexed by character code. HyperCard word-wraps straight out of
+     * it --  `lsl.w #2,d0; add.l (a3,d0.w),d3` against the field width -- so
+     * with no table the widths are whatever the heap held and a line breaks
+     * after one character. Every glyph this HAL draws advances the same
+     * GLYPH_W, so the table is flat and agrees with qd_text_width by
+     * construction. */
+    if(!g_widths){
+        g_widths = heap_alloc(256 * 4);
+        uint32_t fixed = (uint32_t)qd_text_width(1) << 16;
+        for(int i = 0; i < 256; i++) m68k_w32(g_widths + 4u*i, fixed);
+    }
+    m68k_w32(LM_WIDTHPTR, g_widths);
     ret32(o);                              /* into the caller's result slot */
     SP -= 4; m68k_w32(SP, ret);
     m68k_rts();
@@ -1739,7 +1754,8 @@ void m68k_trap(uint16_t raw){
          * full Pascal frame: result, aPtr, bPtr, aLen, bLen, selector, return.
          * It has to clear all of it -- leaving 14 bytes behind is what walked
          * fn_11_013e's stack out from under its saved A3. */
-        uint32_t ret = pop32();
+        int autopop = (raw & 0x0400) != 0;   /* $ADED is the glue form */
+        uint32_t ret = autopop ? pop32() : 0;
         uint16_t sel = pop16();
         if(sel == 10 || sel == 12){       /* IUMagString / IUMagIDString */
             int blen = (int)(int16_t)pop16(), alen = (int)(int16_t)pop16();
@@ -1762,7 +1778,7 @@ void m68k_trap(uint16_t raw){
         }
         /* Put the return address back: the lifted auto-pop form does an rts
          * straight after the trap, and that is what it pops. */
-        SP -= 4; m68k_w32(SP, ret);
+        if(autopop){ SP -= 4; m68k_w32(SP, ret); }
     } break;
     case 0xA9EB: /*FP68K*/ case 0xA9EC: /*Elems68K*/ case 0xA9EE: /*DecStr68K*/
         (void)pop16(); break;

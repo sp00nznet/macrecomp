@@ -5,6 +5,7 @@
 #include "macrecomp/toolbox.h"
 #include "macrecomp/m68k.h"
 #include "font5x7.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -121,8 +122,10 @@ void qd_fill_oval(const Rect *r, int black){ oval(r,1,black); }
  * occupies the FONT_ROWS rows above it. Fixed pitch: five columns and one of
  * side bearing. Characters outside the font's range advance without drawing. */
 #define GLYPH_W (FONT_COLS + 1)
+void qd_char_trace(int ch);
 void qd_draw_char(int c){
     c &= 0xFF;
+    qd_char_trace(c);
     if(c >= FONT_FIRST && c <= FONT_LAST){
         const uint8_t *g = FONT5X7[c - FONT_FIRST];
         for(int col=0; col<FONT_COLS; col++)
@@ -133,6 +136,17 @@ void qd_draw_char(int c){
 }
 int qd_text_width(int len){ return len*GLYPH_W; }
 void qd_draw_text(const uint8_t *p, int len){ for(int i=0;i<len;i++) qd_draw_char(p[i]); }
+
+/* MRCHARS=1: every glyph with the pen position it landed at, and which
+ * bitmap it went into. Text that is laid out wrongly looks identical to
+ * text that is drawn wrongly once it is pixels; the pen says which. */
+void qd_char_trace(int ch){
+    static int on = -1;
+    if(on < 0) on = getenv("MRCHARS") != 0;
+    if(!on) return;
+    fprintf(stderr, "[ch] %3d,%3d %s %c\n", pen_h, pen_v,
+            cur.is_screen ? "scr" : "off", (ch >= 32 && ch < 127) ? ch : 46);
+}
 
 /* CopyBits: 1-bit source (row-padded to src_rowbytes) -> framebuffer, scaled by
  * simple nearest sampling from srcR to dstR. mode ignored except invert. */

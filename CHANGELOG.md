@@ -6,6 +6,42 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The font width table was never built, so every line broke after one
+  character.** `FMSwapFont` leaves a pointer to the current font's width table
+  in low memory at `$0B10`: 256 Fixed entries indexed by character code.
+  HyperCard word-wraps straight out of it, walking a line with
+  `lsl.w #2,d0; add.l (a3,d0.w),d3` and comparing the running total against the
+  field width. With nothing at `$0B10` the widths were whatever the heap
+  happened to hold, so a line ran out of room almost immediately. On the
+  catalog's section cards that turned `BUYING A TELESCOPE` into `B` on one line
+  and `UYING A TELESCOPE` on the next, and did the same to any line long enough
+  to be measured.
+
+  The table is now built alongside the `FMOutput` record. Every glyph this HAL
+  draws advances the same `GLYPH_W`, so it is flat and agrees with
+  `qd_text_width` by construction. `BUYING A TELESCOPE` lands on one line at
+  x=69 -- correctly indented behind its six leading spaces -- where it used to
+  be at (33,170) and (33,183).
+
+- **Pack6 assumed every call was the auto-pop glue form.** `norm()` maps
+  `$A9ED` and `$ADED` to the same word, so a plain call had its first argument
+  popped as if it were the return address the glue pushes. Latent so far
+  because HyperCard only reaches this through the glue, but wrong. The handler
+  now checks the auto-pop bit in the raw trap word.
+
+### Added
+
+- `MRCHARS=1` prints every glyph with the pen position it landed at and which
+  bitmap it went into. Text laid out wrongly and text drawn wrongly are the
+  same pixels; the pen tells them apart, and it is what localised the width
+  table in one run.
+- `MRLAYERS=<prefix>` writes the two halves of the composite separately --
+  QuickDraw's `qd_fb` and the title's own screen memory. When art sits off from
+  the frames around it, the composite cannot show you which layer moved.
+
+
 ### Verified
 
 - **A second, unrelated HyperCard title runs.** Everything so far had been
