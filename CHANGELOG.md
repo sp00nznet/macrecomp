@@ -8,6 +8,24 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **The whole card paints.** `adda.w`/`suba.w`/`cmpa.w` were lifted with their
+  *source* read as a longword and then truncated to a word -- which keeps the
+  low half, i.e. the word two bytes further on, not the one addressed. (A
+  postincrement source stepped by four instead of two, too.) HyperCard's WOBA
+  row decoder finds the end of the row it is filling with
+  `adda.w $8(a6),a2`, so it was handed the argument above the one it wanted,
+  decided the row came out short, gave up, and blanked every row after. The
+  card bitmap stopped around row 232 of 342 -- the white band under the
+  illustration in every screenshot this repo has ever shown. 56 call sites
+  across the title were lifted this way. Cards now render all 342 rows.
+
+- **The lifter lost the routine behind a PC-relative computed jump.** CODE 18's
+  literal-run copier ends in a Duff's device: a byte table at `$1e2a` indexes
+  `jmp $1e2a(pc,d1.w)` into a chain of `move.b (a0)+,(a1)+`. The table is data,
+  the eight landing points are not reachable by any literal branch, and the
+  sweep decoded the table as instructions and drifted. `work/regen.sh` now
+  names those entry points, as it already did for four other segments.
+
 - **QuickDraw drew into a private overlay, so nothing it drew could ever be
   erased.** `qd_fb` was a second framebuffer that the presenter OR'd on top of
   the title's own screen memory, and a clear pixel in it was transparent rather

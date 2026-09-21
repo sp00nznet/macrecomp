@@ -778,9 +778,14 @@ and that is where the same word acquires two different classes.
 
 HyperCard 1.2.2 opens the catalog's `WHOLE EARTH` stack, draws its Table of
 Contents card, and follows a click from there into a section stack and on to
-that section's own contents card, artwork included. What still does not paint is
-the bottom of a card: the WOBA expander stops around row 232 of 342, leaving a
-white band under the illustration.
+that section's own contents card -- all 342 rows of artwork included.
+
+The white band that used to sit under every illustration was a lifter bug, not
+a decoder one. `adda.w`/`suba.w`/`cmpa.w` read their source as a longword and
+truncated it, which keeps the *low* half: the word two bytes past the one
+addressed. HyperCard's WOBA row decoder locates the end of the row it is
+filling with `adda.w $8(a6),a2`, so it got the argument above the one it
+wanted, judged the row short, gave up and blanked the rest of the card.
 
 `MRCLICK=x,y[,n]` synthesises a click, and the Table of Contents buttons are
 read out of the stack file: the left column runs t=43,81,118,155,193,230,269
@@ -819,7 +824,7 @@ Two root causes had to be fixed before anything could appear:
 Superseded: this section was written when no card painted, and the analysis
 below explains a composite that no longer behaves that way. It is kept because
 the trace of the render chain is still accurate about which routine is which.
-Cards paint; the open question is only why the WOBA expander stops short.
+Cards paint in full.
 
 The render chain is traced end to end and every link is confirmed to run by
 breakpoint count: the update handler, the paint dispatch, the renderer

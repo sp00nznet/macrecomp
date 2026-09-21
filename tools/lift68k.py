@@ -307,7 +307,14 @@ def emit_inner(ins, targets):
             C.extend(a.post+b.post)
         else: C.append(unimpl(ins))
     elif base in ("adda","suba"):
-        a=P(ops[0],4); n=P(ops[1],4).areg
+        # The source is read at the instruction's own size. Reading a word form
+        # as a longword and then truncating takes the *low* half of it -- the
+        # word two bytes further on, not the one addressed -- and a
+        # postincrement source steps by four instead of two. HyperCard's WOBA
+        # row decoder is `adda.w $8(a6),a2` to find the end of the row, so it
+        # was reading the argument above the one it wanted and stopping the
+        # card bitmap partway down.
+        a=P(ops[0],sz); n=P(ops[1],4).areg
         if a and n is not None:
             src=a.r if sz==4 else f"(uint32_t)(int32_t)(int16_t)({a.r})"
             C.extend(a.pre); C.append(f"M.a[{n}]{'+' if base=='adda' else '-'}={src};"); C.extend(a.post)
@@ -318,9 +325,20 @@ def emit_inner(ins, targets):
         # belongs here; left out, every byte-by-byte name comparison in a title
         # silently does nothing. HyperCard uses it to check whether the file it
         # just opened really is the home stack.
-        s2=4 if base=="cmpa" else sz; r=two(s2)
-        if r: a,b=r; C.append(f"fl_cmp({a.r},{b.r},({b.r}-{a.r}),{s2});"); C.extend(a.post+b.post)
-        else: C.append(unimpl(ins))
+        # cmpa compares against the whole address register, but it reads its
+        # source at its own size and sign-extends -- same trap as adda above.
+        if base=="cmpa":
+            a,b=P(ops[0],sz),P(ops[1],4)
+            if a and b:
+                C.extend(a.pre); C.extend(b.pre)
+                src=a.r if sz==4 else f"(uint32_t)(int32_t)(int16_t)({a.r})"
+                C.append(f"{{ uint32_t _s={src}; fl_cmp(_s,{b.r},({b.r}-_s),4); }}")
+                C.extend(a.post+b.post)
+            else: C.append(unimpl(ins))
+        else:
+            r=two()
+            if r: a,b=r; C.append(f"fl_cmp({a.r},{b.r},({b.r}-{a.r}),{sz});"); C.extend(a.post+b.post)
+            else: C.append(unimpl(ins))
     elif base=="not":
         b=P(ops[0]); C.extend(b.pre); C.append(f"{{ uint32_t _r=~{b.r}; {b.w('_r')} fl_logic(_r,{sz}); }}"); C.extend(b.post)
     elif base=="neg":

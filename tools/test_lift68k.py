@@ -550,6 +550,28 @@ def test_odd_branch_target():
     assert bit and not L.odd_branch_target(bit)
 
 
+
+def test_word_source_of_adda_and_cmpa():
+    """`adda.w`/`cmpa.w` read a word, not a longword whose low half they keep.
+
+    Read as a longword and truncated, `adda.w $8(a6),a2` picks up the word at
+    a6+10 -- the next argument along. HyperCard's WOBA row decoder finds the
+    end of a row that way, so the card bitmap stopped two thirds down.
+    """
+    import lift68k as L
+    def lift(hexbytes):
+        ins = L.disasm_one(bytes.fromhex(hexbytes), 0)
+        assert ins, hexbytes
+        lines, _fallthrough = L.emit(ins, set())
+        return " ".join(lines)
+    adda = lift("d4ee0008")          # adda.w $8(a6), a2
+    assert "m68k_r16" in adda and "m68k_r32" not in adda, adda
+    cmpa = lift("b4ee0008")          # cmpa.w $8(a6), a2
+    assert "m68k_r16" in cmpa and "m68k_r32" not in cmpa, cmpa
+    # The long forms still read a long.
+    assert "m68k_r32" in lift("d5ee0008")   # adda.l $8(a6), a2
+
+
 def main():
     cc = find_cc()
     if not cc:
