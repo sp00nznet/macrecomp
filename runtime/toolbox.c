@@ -1435,6 +1435,9 @@ void m68k_trap(uint16_t raw){
             if(nm){ int L=g_res[i].namelen; if(L>255) L=255;
                 m68k_w8(nm, (uint8_t)L);
                 for(int k=0;k<L;k++) m68k_w8(nm+1+k, g_res[i].name[k]); }
+            if(getenv("MRTRACE")) fprintf(stderr, "  resinfo %s %d '%.*s'\n",
+                g_res[i].type, g_res[i].id, g_res[i].namelen,
+                g_res[i].name ? (const char *)g_res[i].name : "");
             break; }
         if(nm) m68k_w8(nm,0); } break;
     case 0xA9A9: /*SetResInfo*/ (void)pop32(); (void)pop32(); (void)pop16(); break;

@@ -760,9 +760,29 @@ do parse (`put 0 into sndRefNum`) get there with a class-7 *numeric literal*,
 not a function name -- an earlier reading of that as evidence about function
 names was wrong.
 
-**The open question is narrow:** what makes the tokenizer give a name class 13
-or 10 rather than 21. That is how HyperCard marks a word as a known function,
-and `accUpdate` is not getting it.
+**What the class depends on is not the name.** `accUpdate` is tokenized *both
+ways inside the same script*:
+
+```
+return accUpdate( 2, updHandle, theAccession )      srcoff 0x531 -> class 9, kw 12
+put    accUpdate( 4, indexFileName, dataFileName )  srcoff 0x699 -> class 21, kw 0
+```
+
+Same name, same three-argument shape, one script. And in that same script
+`put pullTabbedChunk() into field "theSubTitle"` parses while the `accUpdate`
+line does not. So the classification is contextual or depends on parser state
+at the moment the token is reached -- it is not "HyperCard has never heard of
+this word".
+
+The external-name pipeline is confirmed working and is *not* the cause. The
+compile-time loop is `UseResFile` -> `Get1IxResource` -> `GetResInfo` per
+resource, it runs for every open fork, it completes well before the failing
+parse, and with resource names now carried it hands back the real ones --
+`resinfo XFCN 2001 'accUpdate'` appears in the trace ahead of the parse.
+
+Next: find what writes the class byte at `a5-0x2b92`. The token array is
+pre-built and `fn_9_00e0` only indexes into it, so something else fills it,
+and that is where the same word acquires two different classes.
 
 ## Out of scope
 
