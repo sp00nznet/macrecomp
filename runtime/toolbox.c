@@ -219,6 +219,53 @@ static uint32_t res_get_named(Res *r){
     return r->handle;
 }
 
+/* Enumeration walks the Resource Manager's chain, and the chain hides
+ * duplicates: a resource in the current file shadows one with the same type
+ * and id in the application's. Counting and indexing every registered
+ * resource instead -- across every open fork, shadowed or not -- gives a count
+ * that disagrees with what indexing returns, and an index that resolves the
+ * wrong file's copy or none at all. HyperCard enumerates XFCN and XCMD this
+ * way to learn the external names it will accept, so the ones it misses stay
+ * unknown words: `accUpdate( 4, ... )` then parses as a bare variable and the
+ * statement dies on the paren. `one` restricts to the current file, which is
+ * what the Get1/Count1 forms mean. */
+static int res_shadowed(Res *r, int curfile){
+    if(r->file == curfile) return 0;
+    for(int i = 0; i < g_nres; i++)
+        if(g_res[i].file == curfile && g_res[i].id == r->id
+           && strcmp(g_res[i].type, r->type) == 0) return 1;
+    return 0;
+}
+static Res *res_chain_nth(const char *want, int ix, int one){
+    int n = 0;
+    for(int pass = 0; pass < 2; pass++){
+        int f = pass == 0 ? g_curres : 1;
+        if(pass == 1 && (one || g_curres == 1)) break;
+        for(int i = 0; i < g_nres; i++){
+            Res *r = &g_res[i];
+            if(r->file != f || strcmp(r->type, want) != 0) continue;
+            if(pass == 1 && res_shadowed(r, g_curres)) continue;
+            if(ix > 0 && ++n == ix) return r;
+            if(ix <= 0) n++;
+        }
+    }
+    return ix > 0 ? 0 : (Res *)(intptr_t)n;   /* ix<=0: n is the count */
+}
+static int res_chain_count(const char *want, int one){
+    int n = 0;
+    for(int pass = 0; pass < 2; pass++){
+        int f = pass == 0 ? g_curres : 1;
+        if(pass == 1 && (one || g_curres == 1)) break;
+        for(int i = 0; i < g_nres; i++){
+            Res *r = &g_res[i];
+            if(r->file != f || strcmp(r->type, want) != 0) continue;
+            if(pass == 1 && res_shadowed(r, g_curres)) continue;
+            n++;
+        }
+    }
+    return n;
+}
+
 static uint32_t res_get(uint32_t typelong, int id){
     char want[5]; type4(typelong,want);
     /* HyperTalk syntax errors are STR# 1002. Probe here rather than at the
@@ -1355,10 +1402,12 @@ void m68k_trap(uint16_t raw){
      * Resource Manager already serves is the answer. Index is 1-based. */
     case 0xA99D: /*GetIndResource*/ case 0xA80E: { /*Get1IxResource*/
         int16_t ix=pop16(); uint32_t ty=pop32();
-        char want[5]; type4(ty,want); int n=0; uint32_t h=0;
-        for(int i=0;i<g_nres;i++) if(strcmp(g_res[i].type,want)==0)
-            if(++n==ix){ h=res_get(ty, g_res[i].id); break; }
-        m68k_w32(SP,h); } break;
+        char want[5]; type4(ty,want);
+        Res *r = res_chain_nth(want, ix, w == 0xA80E);
+        uint32_t h = r ? res_get_named(r) : 0;
+        if(getenv("MRTRACE")) fprintf(stderr, "  ind '%s' %d -> %06x (file %d)\n",
+                                      want, ix, h, r ? r->file : 0);
+        m68k_w32(SP, h); } break;
     case 0xA99E: /*CountTypes*/ case 0xA81C: { /*Count1Types*/
         int n=0;
         for(int i=0;i<g_nres;i++){ int seen=0;
@@ -1390,10 +1439,9 @@ void m68k_trap(uint16_t raw){
         if(nm) m68k_w8(nm,0); } break;
     case 0xA9A9: /*SetResInfo*/ (void)pop32(); (void)pop32(); (void)pop16(); break;
     case 0xA9A2: /*LoadResource*/ (void)pop32(); break;  /* already in memory */
-    case 0xA99C: /*CountResources*/ case 0xA80D: /*Count1Resources*/ {
-        uint32_t ty=pop32(); char want[5]; type4(ty,want); int n=0;
-        for(int i=0;i<g_nres;i++) if(strcmp(g_res[i].type,want)==0) n++;
-        ret16((uint16_t)n); } break;
+    case 0xA99C: /*CountResources*/ case 0xA80D: { /*Count1Resources*/
+        uint32_t ty=pop32(); char want[5]; type4(ty,want);
+        ret16((uint16_t)res_chain_count(want, w == 0xA80D)); } break;
     case 0xA9C8: /*SysBeep*/ (void)pop16(); break;      /* no audio path yet */
     case 0xA866: /*StuffHex*/ {                          /* StuffHex(ptr, Str255) */
         uint32_t sp2=pop32(), dst=pop32();
