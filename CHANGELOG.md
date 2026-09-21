@@ -8,6 +8,27 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **`GetResInfo` erased the name it had just written.** The match loop copied
+  the resource's name into the caller's `Str255` and broke out; the line after
+  the loop then set the length byte to zero unconditionally, which was meant to
+  answer a *miss* with an empty string. Every name came back empty. HyperCard
+  finds its externals by enumerating `XCMD` and `XFCN` and reading each one's
+  name, so its table of known externals was nine blank entries, `accUpdate`
+  was not among them, and the catalog's search card died on
+  `Can't understand arguments to command put` -- a modal alert, which stops the
+  event loop and ends the run. With the names intact the table reads
+  `FileName popup popDown findNext popupMenu pullTabbedChunk accUpdate OpenRes
+  showHelp`, the statement compiles, and navigation goes a card deeper: the
+  section cards now draw 251 rows where they stopped at 53.
+
+- **`$A99A` and `$A99B` were swapped, and one of them over-popped.** `$A99A` is
+  `CloseResFile(refNum: INTEGER)` and `$A99B` is `SetResLoad(load: BOOLEAN)`;
+  they were handled as `HomeResFile` and `CloseResFile`. Worse, the `$A99A`
+  case popped a longword for a word argument, so every `CloseResFile` ate two
+  bytes of its caller's frame. `SetResLoad` is accepted and ignored -- the
+  Resource Manager here always loads, which a caller cannot tell apart unless
+  it inspects the master pointer before `LoadResource`.
+
 - **`TextMode` was discarded, so text could never erase what it drew over.**
   `$A889` popped its argument and threw it away, leaving every glyph an OR of
   black pixels. srcCopy is meant to paint the whole cell, background included.

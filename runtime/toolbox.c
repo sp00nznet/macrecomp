@@ -795,7 +795,10 @@ void m68k_trap(uint16_t raw){
     case 0xA894: /*Move*/   { int16_t dv=pop16(),dh=pop16(); qd_pen_to(0,0); (void)dh;(void)dv; } break;
     case 0xA891: /*LineTo*/ { int16_t v=pop16(),h=pop16(); qd_line_to(h,v); } break;
     case 0xA892: /*Line*/   { int16_t dv=pop16(),dh=pop16(); qd_line(dh,dv); } break;
-    case 0xA8A1: /*FrameRect*/ { Rect r=rd_rect(pop32()); qd_frame_rect(&r); } break;
+    case 0xA8A1: /*FrameRect*/ { Rect r=rd_rect(pop32()); qd_frame_rect(&r);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] FrameRect %d,%d,%d,%d
+",
+            r.top,r.left,r.bottom,r.right); } break;
     case 0xA8A2: /*PaintRect*/ { Rect r=rd_rect(pop32()); qd_paint_rect(&r); } break;
     case 0xA8A3: /*EraseRect*/ { if(getenv("MRGFX")){ Rect _c; qd_get_clip(&_c);
             uint32_t _rp=m68k_r32(SP); Rect _r=rd_rect(_rp);
@@ -1454,8 +1457,8 @@ void m68k_trap(uint16_t raw){
      * title that enumerates a type and matches on the name -- how externals
      * are found -- gets nowhere against an empty Str255. */
     case 0xA9A8: { /*GetResInfo*/
-        uint32_t nm=pop32(), tp=pop32(), idp=pop32(), h=pop32();
-        for(int i=0;i<g_nres;i++) if(g_res[i].handle==h && h){
+        uint32_t nm=pop32(), tp=pop32(), idp=pop32(), h=pop32(); int found=0;
+        for(int i=0;i<g_nres;i++) if(g_res[i].handle==h && h){ found=1;
             if(idp) m68k_w16(idp,(uint16_t)g_res[i].id);
             if(tp){ const char *t=g_res[i].type;
                 for(int k=0;k<4;k++) m68k_w8(tp+k, t[k]?(uint8_t)t[k]:' '); }
@@ -1466,7 +1469,7 @@ void m68k_trap(uint16_t raw){
                 g_res[i].type, g_res[i].id, g_res[i].namelen,
                 g_res[i].name ? (const char *)g_res[i].name : "");
             break; }
-        if(nm) m68k_w8(nm,0); } break;
+        if(nm && !found) m68k_w8(nm,0); } break;
     case 0xA9A9: /*SetResInfo*/ (void)pop32(); (void)pop32(); (void)pop16(); break;
     case 0xA9A2: /*LoadResource*/ (void)pop32(); break;  /* already in memory */
     case 0xA99C: /*CountResources*/ case 0xA80D: { /*Count1Resources*/
@@ -1547,9 +1550,15 @@ void m68k_trap(uint16_t raw){
     case 0xA9C4: { /*OpenRFPerm*/
         (void)pop16(); (void)pop16(); uint32_t nm=pop32();
         ret16((uint16_t)fs_open_resfork(nm)); } break;
-    case 0xA99B: /*CloseResFile*/ (void)pop16(); break;
+    /* $A99A is CloseResFile(refNum: INTEGER), $A99B is SetResLoad(load:
+     * BOOLEAN). These were swapped, and CloseResFile was popping a longword,
+     * eating two bytes of its caller's frame. ponytail: ResLoad is accepted
+     * and ignored -- res_get always loads, which a caller cannot tell apart
+     * unless it inspects the master pointer before calling LoadResource. */
+    case 0xA99A: /*CloseResFile*/ (void)pop16(); break;
+    case 0xA99B: /*SetResLoad*/  (void)pop16(); break;
     case 0xA992: /*DetachResource*/ case 0xA9A3: /*ReleaseResource*/ case 0xA9A4: /*LoadResource*/
-    case 0xA99A: /*HomeResFile? */ (void)pop32(); break;
+        (void)pop32(); break;
     case 0xA9AB: /*AddResource*/ (void)pop32();(void)pop32();(void)pop16();(void)pop32(); break;
 
     /* ---- Memory Manager (register-based) ---- */
