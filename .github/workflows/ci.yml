@@ -45,6 +45,7 @@ jobs:
         run: |
           python tools/test_scan_traps.py
           python tools/test_extract_resources.py
+          python tools/test_find_entries.py
           python tools/test_lift68k.py
 
       # The corpus is copyrighted Mac media and cannot live in the repo, so this

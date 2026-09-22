@@ -8,6 +8,18 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- **`find_entries.py` could not see a byte-indexed computed jump.** It read
+  every `jmp d(pc,Dn.w)` table as 16-bit offsets, which finds nothing when the
+  arms are named by single bytes -- the Duff's-device form, where
+  `move.b <tbl>(pc,Dn.w),Dm` picks the index and the table sits at the jump's
+  own base rather than after it. That is CODE 18's literal-run copier, and the
+  tool reporting zero missing targets for it is how it stayed unreachable. The
+  byte form is now read when a `move.b d(pc,Dn.w),Dm` sits within sixteen bytes
+  ahead of the jump, with the base taken from the extension word's
+  displacement. It finds CODE 18's eight arms and nothing spurious; the
+  word-table path is untouched. `tools/test_find_entries.py` covers both, and
+  CI runs it.
+
 - **The whole card paints.** `adda.w`/`suba.w`/`cmpa.w` were lifted with their
   *source* read as a longword and then truncated to a word -- which keeps the
   low half, i.e. the word two bytes further on, not the one addressed. (A

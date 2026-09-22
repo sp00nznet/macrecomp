@@ -135,18 +135,26 @@ than a hang.
 
 ### Computed-jump entry points (`tools/find_entries.py`)
 
-A `jmp d(pc,Dn.w)` -- `0x4EFB` -- is a switch: an extension word, a table of
-16-bit offsets, then the arms. **Nothing in the binary names those arms**, so a
-linear decode only lands on one by luck, and a target it missed becomes an
-`m68k_entry_miss` at run time: the function returns without doing anything, in
-silence. One such address in `CODE 12` was the entire reason HyperTalk did not
-execute.
+A `jmp d(pc,Dn.w)` -- `0x4EFB` -- is a switch. **Nothing in the binary names
+its arms**, so a linear decode only lands on one by luck, and a target it
+missed becomes an `m68k_entry_miss` at run time: the function returns without
+doing anything, in silence. One such address in `CODE 12` was the entire reason
+HyperTalk did not execute.
+
+Two table shapes. The usual one is a table of 16-bit offsets straight after the
+jump. The other is a Duff's device: `move.b <tbl>(pc,Dn.w),Dm` picks a byte out
+of a table and `jmp <tbl>(pc,Dm.w)` lands that many bytes into an unrolled copy
+chain, so the entries are single bytes and the table sits at the jump's own
+base. CODE 18's literal-run copier is the second kind, and reading it as words
+finds nothing -- which is how it stayed unreachable long enough to cost the
+bottom third of every card bitmap.
 
 `find_entries.py` reads every table, checks each target against the generated
 code, and prints the ones with neither a `case` label nor a registered function
 start -- exactly what to hand back as `--entry`. Re-run it after each lift
 until it reports nothing: fixing one set shifts the boundaries and can expose
-another. For this binary it converges in two rounds at **30 addresses**:
+another. The list this binary converges on, which is what `work/regen.sh`
+hands the lifter:
 
 | segment | `--entry` |
 |---|---|
@@ -158,7 +166,8 @@ another. For this binary it converges in two rounds at **30 addresses**:
 | CODE 12 | `0x1322,0x263a,0x2f5c` |
 | CODE 13 | `0xc32,0x446c,0x45b6,0x47a0,0x4c14` |
 | CODE 16 | `0x2ca6,0x4bc8` |
-| CODE 21 | `0x1d4,0x3f18` |
+| CODE 18 | `0x1eaa,0x1eac,0x1eae,0x1eb0,0x1eb2,0x1eb4,0x1eb6,0x1eb8` |
+| CODE 21 | `0x1d4,0x3f18` + the 16 arms of the WOBA opcode switch at `0x5ba2`, `0x5bc2` through `0x5c92` |
 
 Dropped deliberately: an entry that points backwards, outside the segment, or
 at an odd address means the table has ended and the arms have begun.
@@ -556,14 +565,15 @@ rather than chasing who writes `0x8001`.
   all four are loaded correctly at run time (`res 'WTLK' 1..4`), so the word
   is known -- the failure is in parsing the message name after it.
 
-  Worth noting for that hunt: `find_entries.py` only sees **word**-indexed
-  `4EFB` tables. The WOBA row decoder uses a **byte**-indexed one --
-  `move.b <tbl>(pc,Dn.w),Dm` then `jmp <tbl>(pc,Dm.w)`, targets `tbl + byte`.
-  Scanning for those by treating every `4EFB` table as bytes reports 1,718
-  "missing" targets, nearly all noise, because a word table's halves are not
-  offsets. Finding them properly means matching the `move.b` that precedes the
-  jump and sharing its base; that is not done, and it is a real gap in the
-  tool given how much damage one missed arm did.
+  Worth noting for that hunt: `find_entries.py` used to see only
+  **word**-indexed `4EFB` tables. The WOBA literal-run copier uses a
+  **byte**-indexed one -- `move.b <tbl>(pc,Dn.w),Dm` then
+  `jmp <tbl>(pc,Dm.w)`, targets `tbl + byte`. Treating every `4EFB` table as
+  bytes reported 1,718 "missing" targets, nearly all noise, because a word
+  table's halves are not offsets. **Done now**: the byte form is only read when
+  a `move.b d(pc,Dn.w),Dm` sits within sixteen bytes ahead of the jump, and the
+  table base comes from the extension word's own displacement, which is where a
+  byte table sits. That finds CODE 18's eight arms and nothing spurious.
 
 - **A chunk expression loses two characters.** The catalogue's script builds a
   path from `the long name of this stack`; with the volume renamed `ABCDEFGH`
