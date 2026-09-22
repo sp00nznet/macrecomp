@@ -123,22 +123,25 @@ a whole run hits only two unimplemented instructions, and it executes ~305
 Toolbox calls: the full init sequence (InitGraf/InitFonts/InitWindows/TEInit/
 InitDialogs), then its own resources.
 
-It does **not** currently render. An earlier build drew HyperCard's own error
-dialog -- from its real `ALRT`/`DITL` resources, with legible text -- which was
-how the ROM-version check and the Dialog Manager got verified. Fixing the lifter
-bugs behind that check moved execution past the error path, and it then stopped
-earlier, before anything was drawn, on an indirect jump into the middle of a
-function.
+**And it works.** It opens a stack off the disc, compiles and runs the card's
+HyperTalk, paints the card — artwork included, all 342 rows of it — and
+follows a click to the next card. The screenshot below is a real frame.
 
-**That jump now resolves**, and a measured run says so: lifted functions take an
-entry address and label every instruction, the runtime finds the function whose
-body *covers* an address rather than only the one that starts at it, and **not
-one mid-function jump fails in a whole run**.
+Three faults stood between booting and that, and not one of them was specific
+to HyperCard:
 
-**HyperCard renders.** It reaches **372 Toolbox calls** and draws its own modal
-dialog frame — see the screenshot below.
+- **An indirect jump into the middle of a function.** Lifted functions now
+  take an entry address and label *every* instruction, and the runtime finds
+  the function whose body *covers* an address rather than only the one that
+  starts at it. Not one mid-function jump fails in a whole run.
+- **`adda.w`, `suba.w` and `cmpa.w` read their source as a longword** and
+  then truncated it, which keeps the *low* half — the word two bytes past
+  the one addressed. 56 call sites. HyperCard's bitmap decoder finds the end
+  of the row it is filling that way, so it judged every row short and left
+  the bottom third of every card blank.
+- **A busy-wait on `Ticks` with no clock**, below.
 
-Getting there meant finding a loop that made no traps, no calls and no tail
+Finding the third meant finding a loop that made no traps, no calls and no tail
 jumps. Every loop goes round a *backward branch*, so the lifter now emits a hook
 there; one address took 19,999,889 of 20,000,000 ticks, and it was a busy-wait
 on the low-memory `Ticks` global — HyperCard calibrating machine speed. The
@@ -146,24 +149,27 @@ runtime only advanced `Ticks` from `m68k_call`, and that loop makes no calls, so
 the wait could only be infinite. The same hook now advances `Ticks` every 2048
 backward branches, which fixes the whole class: every classic-Mac timing
 busy-wait needs it. [ROADMAP.md](ROADMAP.md) has the disassembly, the debugging
-switches, and what is still stubbed (`FSDispatch`, SANE).
+switches, and what is still stubbed (SANE, and a title's own `XCMD`/`XFCN`
+code, which never reaches the lifter).
 
-Next target: **HyperCard** itself. It is one 68k `APPL`, and recompiling it makes
-every HyperCard stack a target at once rather than one title at a time — which
-is why the stack repos that consume it stay nearly empty. The ranked trap gap is
-in [ROADMAP.md](ROADMAP.md).
+HyperCard was the target on purpose. It is one 68k `APPL`, and recompiling it
+makes every HyperCard stack reachable at once rather than one title at a
+time — which is why the stack repos that consume it stay nearly empty.
 
 ## Screenshot
 
-![HyperCard 1.2.2, recompiled, reporting a stack error in its own dialog](docs/img/hypercard-stack-error.png)
+![The Electronic Whole Earth Catalog's WHOLE SYSTEMS card, drawn by HyperCard 1.2.2 recompiled to C](docs/img/hypercard-card.png)
 
-HyperCard 1.2.2 recompiled to C and running headless: its own dialog, its own
-text and button, drawn through the QuickDraw HAL into a 512x342 1-bit
-framebuffer. By this point it has walked the disc's catalogue, found the `Home`
-stack among the 279 files, opened both its forks and read the stack header and
-master index — and is reporting what it makes of the contents. Real output, not
-a mockup. [ROADMAP.md](ROADMAP.md) has what error 1250 is and what still stands
-between here and a card on screen.
+HyperCard 1.2.2 recompiled to C, drawing a card from The Electronic Whole Earth
+Catalog (Broderbund, 1988) into a 512×342 1-bit framebuffer. Everything here is
+the title's own work: it mounted the disc image, found and opened the stack,
+decompressed the card's bitmap, laid out and drew the text, and got to this
+card by following a click from the catalog's table of contents. Real output,
+not a mockup.
+
+The same card rendered as white with eight empty boxes until the `adda.w`
+operand-size fix above; the artwork is what the bitmap decoder was giving up
+on two thirds of the way down.
 
 ## Using macrecomp in your project
 
@@ -209,3 +215,9 @@ macrecomp/
 MIT — see [LICENSE](LICENSE). The toolkit is original work. It ships **no** Apple
 ROM, System software, or copyrighted game data — you bring your own copy of
 whatever you're recompiling.
+
+The screenshot is a single frame of a recompiled program running, included to
+show what the toolkit does. HyperCard is © Apple Computer; The Electronic Whole
+Earth Catalog is © 1988 Broderbund Software, and the Whole Earth Catalog and
+its contents © Point Foundation and the respective authors. No code or data
+from any of them is in this repo.
