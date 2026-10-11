@@ -408,6 +408,8 @@ static void test_fonts(void){
     call_begin(2); push32(pstr("AB?")); TRAP(0xA88C);
     CHECK(call_end32() == 12, "bold widens each glyph by one");
     push16(0); TRAP(0xA888);
+    uint32_t white = alloc(8); for(int i=0;i<8;i++) m68k_w8(white+i, 0);
+    push32(white); TRAP(0xA89D);                       /* a white pen must not whiten text */
     push16(10); push16(20); TRAP(0xA893); push32(pstr("AB")); TRAP(0xA884);
     CHECK(qd_screen_get(10,18) && qd_screen_get(11,19) && !qd_screen_get(12,19), "A's 2x2 block at 10,18");
     CHECK(!qd_screen_get(13,18) && qd_screen_get(14,18) && qd_screen_get(16,18) && !qd_screen_get(14,19),

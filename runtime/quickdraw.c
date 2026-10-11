@@ -230,7 +230,10 @@ int qd_font_width(const uint8_t *f, int bold, const uint8_t *p, int len){
 void qd_font_draw(const uint8_t *f, int bold, const uint8_t *p, int len){
     int fh = fw(f,7), asc = fw(f,9), rw = 2*fw(f,12);
     const uint8_t *bits = f + 26, *loc = bits + rw*fh, *ow = f + 16 + 2*fw(f,8);
-    int ink = (txt_mode == 4) ? !pen_black : pen_black;
+    /* Glyphs are ink in the port's colour, never the pen pattern: a title that
+     * last painted with a white pen still draws black text. srcOr/srcCopy set,
+     * srcXor inverts, srcBic clears; notSrcCopy (4) is white on black. */
+    int op = txt_mode & 3, ink = txt_mode == 4 ? 0 : 1;
     for(int k=0;k<len;k++){
         qd_char_trace(p[k]);
         int i = font_glyph(f,p[k]), adv = font_adv(f,bold,p[k]);
@@ -240,7 +243,8 @@ void qd_font_draw(const uint8_t *f, int bold, const uint8_t *p, int len){
         int x0 = pen_h + fw(f,4) + ow[2*i];
         for(int y=0;y<fh;y++) for(int b=l0;b<l1;b++)
             if(bits[y*rw + (b>>3)] >> (7-(b&7)) & 1)
-                for(int d=0; d<=bold; d++) put(x0 + b-l0 + d, pen_v-asc+y, ink);
+                for(int d=0; d<=bold; d++) { int px = x0 + b-l0 + d, py = pen_v-asc+y;
+                    put(px, py, op == 2 ? !getpix(px, py) : op == 3 ? 0 : ink); }
         pen_h += adv;
     }
 }
