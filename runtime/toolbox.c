@@ -856,6 +856,8 @@ void m68k_trap(uint16_t raw){
      * apart. */
     case 0xA970: /*GetNextEvent*/ case 0xA971: /*EventAvail*/ {
         plat_present();                       /* reaching the event loop == booted */
+        {   static int said;                  /* a milestone for harnesses to match */
+            if(!said++) fprintf(stderr, "[boot] event loop reached\n"); }
         if(plat_quit_requested()) exit(0);
         /* MRFORCEMODE: a PROBE, not a fix. HyperCard renders a whole card only
          * when the word at a5-0x1022 is 1, and every routine that sets it is

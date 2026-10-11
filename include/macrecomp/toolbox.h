@@ -109,6 +109,11 @@ Rect ctl_rect(uint32_t c);
 void ctl_draw(uint32_t c);
 
 /* ---- platform (platform_sdl.c) ---- */
+/* Before plat_open. headless: no window, works with no display (RDP, CI).
+ * record: pipe frames to ffmpeg as an mp4 at 30 fps of wall time (NULL = off).
+ * watchdog_s: exit(0) cleanly after that many seconds (0 = never), so a
+ * recording is finalised rather than killed. */
+void plat_config(int headless, const char *record, int watchdog_s);
 int  plat_open(const char *title, int scale);   /* create window; returns 0 ok */
 void plat_present(void);                         /* push qd_fb -> screen */
 void plat_pump(void);                            /* poll OS events into the queue */
