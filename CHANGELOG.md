@@ -20,6 +20,12 @@ All notable changes to this project are documented here. Format follows
   StringWidth, TextWidth and GetFontInfo; bold widens by one. Default on when
   the resource exists; otherwise text keeps the HAL's 5x7 font, so HyperCard
   (whose only FONT is -16500) is unchanged.
+- **Command-key menus** (#7): InsertMenu/DeleteMenu/ClearMenuBar keep the
+  menu bar's handles, and MenuKey answers with the enabled item whose key
+  equivalent matches. Ctrl (or the Windows key) is Command; a script's 'k'
+  step holds Command when its y is nonzero. HiWord and LoWord, which split the
+  answer, are implemented; they were unimplemented traps that left their
+  argument on the stack. Default on. The menu bar itself is still not drawn.
 
 ### Fixed
 
