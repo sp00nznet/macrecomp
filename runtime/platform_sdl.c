@@ -216,11 +216,17 @@ void plat_present(void){
  * time, checked wherever the guest can observe input. After the first scripted
  * move or click the mouse stays where the script put it: a headless run has
  * no real mouse to fall back to. */
-enum { SCR_MAX = 1024 };
-static struct { char kind; int x, y; uint32_t ms; } scr[SCR_MAX];
-static int nscr, scr_next, scr_mouse;
+/* The table grows: a whole match of strokes is thousands of steps, and a
+ * fixed table that dropped the rest froze the mouse partway through. */
+typedef struct { char kind; int x, y; uint32_t ms; } ScrStep;
+static ScrStep *scr;
+static int nscr, scr_cap, scr_next, scr_mouse;
 void plat_script(char kind, int x, int y, double secs){
-    if(nscr >= SCR_MAX) return;
+    if(nscr == scr_cap){
+        ScrStep *g = realloc(scr, (size_t)(scr_cap ? scr_cap*2 : 1024) * sizeof *g);
+        if(!g){ fprintf(stderr, "[script] out of memory\n"); exit(1); }
+        scr = g; scr_cap = scr_cap ? scr_cap*2 : 1024;
+    }
     uint32_t ms = (uint32_t)(secs * 1000.0);
     int i = nscr++;
     while(i > 0 && scr[i-1].ms > ms){ scr[i] = scr[i-1]; i--; }   /* stable sort by time */
