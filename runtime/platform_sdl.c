@@ -239,7 +239,7 @@ static void script_tick(void){
         int x = scr[scr_next].x, y = scr[scr_next].y;
         if(scr[scr_next].kind == 'm'){ syn_x = x; syn_y = y; scr_mouse = 1; }
         else if(scr[scr_next].kind == 'c'){ scr_mouse = 1; plat_inject_click(x, y); }
-        else if(scr[scr_next].kind == 'k'){ evpush(3/*keyDown*/, x, 0, 0);
+        else if(scr[scr_next].kind == 'k'){ evpush(3/*keyDown*/, x | (y ? 0x10000 : 0), 0, 0);
                                             fprintf(stderr, "[key] %d\n", x); }
     }
 }
@@ -254,7 +254,9 @@ void plat_pump(void){
         else if(e.type==SDL_MOUSEBUTTONDOWN) evpush(1/*mouseDown*/,0,e.button.x/g_scale,e.button.y/g_scale);
         else if(e.type==SDL_MOUSEBUTTONUP)   evpush(2/*mouseUp*/,0,e.button.x/g_scale,e.button.y/g_scale);
         else if(e.type==SDL_KEYDOWN){ if(e.key.keysym.sym==SDLK_ESCAPE) quit_req=1;
-                                      evpush(3/*keyDown*/,e.key.keysym.sym,0,0); }
+                                      /* Ctrl stands in for Command (bit 16; see GetNextEvent) */
+                                      evpush(3/*keyDown*/,e.key.keysym.sym
+                                             | (e.key.keysym.mod & (KMOD_CTRL|KMOD_GUI) ? 0x10000 : 0),0,0); }
     }
 }
 

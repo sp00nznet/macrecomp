@@ -421,6 +421,32 @@ static void test_fonts(void){
     push16(0); TRAP(0xA887);
 }
 
+/* MenuKey finds a Command-key equivalent in the menus InsertMenu installed,
+ * and answers 0 for a disabled item or a key no menu has. */
+static void test_menukey(void){
+    printf("menus\n");
+    static const uint8_t m[] = { 0,7, 0,0, 0,0, 0,0,0,0, 0xFF,0xFF,0xFF,0xFF, 4,'G','a','m','e',
+        3,'N','e','w',0,'N',0,0,  3,'O','p','p',0,'O',0,0,  4,'S','n','d','!',0,'s',0,0,  0 };
+    uint32_t p = alloc(sizeof m), h = alloc(4);
+    for(unsigned i=0;i<sizeof m;i++) m68k_w8(p+i, m[i]);
+    m68k_w32(h, p);
+    push32(h); push16(0); TRAP(0xA935);
+    call_begin(4); push16('n'); TRAP(0xA93E);
+    CHECK(call_end32() == (7u<<16 | 1), "Cmd-N is Game item 1");
+    call_begin(4); push16('s'); TRAP(0xA93E);
+    CHECK(call_end32() == (7u<<16 | 3), "Cmd-S is Game item 3, matched case-blind");
+    m68k_w32(p + 10, 0xFFFFFFFBu);                     /* disable item 2 */
+    call_begin(4); push16('o'); TRAP(0xA93E);
+    CHECK(call_end32() == 0, "a disabled item is not chosen");
+    call_begin(4); push16('z'); TRAP(0xA93E);
+    CHECK(call_end32() == 0, "a key no menu has chooses nothing");
+    TRAP(0xA934);                                      /* ClearMenuBar */
+    call_begin(2); push32(7u<<16 | 2); TRAP(0xA86A);
+    CHECK(call_end32() == 7, "HiWord of the answer is the menu");
+    call_begin(2); push32(7u<<16 | 2); TRAP(0xA86B);
+    CHECK(call_end32() == 2, "LoWord of the answer is the item");
+}
+
 int main(void){
     M.memsize = 8u*1024*1024; M.mem = calloc(1,M.memsize);
     SP = 0x100000;
@@ -433,6 +459,7 @@ int main(void){
     test_textedit();
     test_files();
     test_fonts();
+    test_menukey();
     draw_scene();
 
     if(g_fail){ printf("HAL selftest: %d check(s) FAILED\n", g_fail); return 1; }

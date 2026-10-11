@@ -49,7 +49,8 @@ uint32_t mr_screen_base(void);
 /* Queue a synthetic click (MRCLICK); driven by the HAL's event loop. */
 void plat_inject_click(int x, int y);
 /* Scripted input for unattended runs, by wall-clock seconds since plat_open:
- * kind 'm' moves the mouse to x,y, 'c' clicks there, 'k' presses char x. */
+ * kind 'm' moves the mouse to x,y, 'c' clicks there, 'k' presses char x
+ * (with Command held when y is nonzero). */
 void plat_script(char kind, int x, int y, double secs);
 /* Queue an event the guest posted with PostEvent. */
 void plat_post_event(int what, int msg);

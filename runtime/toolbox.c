@@ -121,6 +121,24 @@ static void port_regions(uint32_t p, const Rect *r){
  * HyperCard's four was ever told to repaint -- and it was not the card. */
 #define MAX_WINS 32
 static uint32_t g_wins[MAX_WINS]; static int g_nwins;
+/* The menu bar: InsertMenu's handles, so MenuKey can find a Command-key
+ * equivalent in them. A MenuInfo is id, width, height, procID, enableFlags
+ * (bit 0 the menu, bit n item n), title, then per item: text, icon, key
+ * equivalent, mark, style. */
+enum { MAX_MENUS = 16 };
+static uint32_t g_menus[MAX_MENUS]; static int g_nmenus;
+static uint32_t menu_key(int key){
+    if(key >= 'a' && key <= 'z') key -= 32;
+    for(int m=0;m<g_nmenus;m++){
+        uint32_t p = m68k_r32(g_menus[m]); if(!p) continue;
+        uint32_t en = m68k_r32(p + 10), o = p + 14; o += 1u + m68k_r8(o);
+        for(int i=1; i<=255; i++){ int l = m68k_r8(o); if(!l) break;
+            int k = m68k_r8(o + 2 + l); if(k >= 'a' && k <= 'z') k -= 32;
+            if(k == key && (en & 1) && (i > 31 || (en >> i & 1)))
+                return (uint32_t)(uint16_t)m68k_r16(p) << 16 | (uint32_t)i;
+            o += 1u + (uint32_t)l + 4u; } }
+    return 0;
+}
 static int g_win_pending[MAX_WINS];
 static int g_win_activate[MAX_WINS];   /* owes an activateEvt */
 /* Where each window actually sits on screen. NewWindow is handed global
@@ -1045,9 +1063,13 @@ void m68k_trap(uint16_t raw){
         if(getenv("MRTRACE") && got && what)
             fprintf(stderr, "  event what=%d msg=%x at %d,%d%s\n",
                     what, (unsigned)msg, h, v, peek?" (peek)":"");
+        /* The platform marks a key pressed with Command in bit 16 of its
+         * message; the record carries it as cmdKey in modifiers. */
+        int mods = what==8 ? 1 : 0;                        /* activeFlag */
+        if(what >= 3 && what <= 5 && (msg & 0x10000)){ mods |= 0x0100; msg &= 0xFFFF; }
         if(evp){ m68k_w16(evp,what); m68k_w32(evp+2,msg); m68k_w32(evp+6,plat_ticks());
                  int mh,mv; plat_get_mouse(&mh,&mv); m68k_w16(evp+10,mv); m68k_w16(evp+12,mh);
-                 m68k_w16(evp+14, what==8 ? 1 : 0); }   /* activeFlag */
+                 m68k_w16(evp+14, mods); }
         retbool(got); } break;
 
     /* ---- cursor / port (mostly no-ops; QuickDraw draws to one framebuffer) ---- */
@@ -1216,7 +1238,9 @@ void m68k_trap(uint16_t raw){
         retbool(r.right<=r.left || r.bottom<=r.top); } break;
     case 0xA919: /*GetWTitle*/ { uint32_t nm=pop32(); (void)pop32();
         if(nm) m68k_w8(nm,0); } break;                  /* untitled: one port */
-    case 0xA936: /*DeleteMenu*/ (void)pop16(); break;
+    case 0xA936: /*DeleteMenu*/ { int16_t id=(int16_t)pop16();
+        for(int i=0;i<g_nmenus;i++){ uint32_t p=m68k_r32(g_menus[i]);
+            if(p && (int16_t)m68k_r16(p)==id){ g_menus[i]=g_menus[--g_nmenus]; break; } } } break;
     case 0xA807: /*SndNewChannel*/ (void)pop32(); (void)pop32(); (void)pop16();
         (void)pop32(); ret16((uint16_t)(-201)); break;  /* notEnoughHardwareErr */
     /* StripAddress is a **no-op here**, not a 24-bit mask. It exists because a
@@ -1241,7 +1265,8 @@ void m68k_trap(uint16_t raw){
     /* ---- Menu Manager (thin stubs; menu bar not drawn) ---- */
     case 0xA931: /*NewMenu*/ { uint32_t title=pop32(); (void)title; (void)pop16();
         m68k_w32(SP, heap_alloc(64)); } break;
-    case 0xA935: /*InsertMenu*/ { (void)pop16(); (void)pop32(); } break;
+    case 0xA935: /*InsertMenu*/ { (void)pop16(); uint32_t mh=pop32();
+        if(mh && g_nmenus < MAX_MENUS) g_menus[g_nmenus++] = mh; } break;
     /* A title that routes its menus through a script asks for the item's TEXT,
      * not its number: HyperCard turns a choice into `doMenu "Open Stack..."`.
      * Both of these were unimplemented, so the name came back empty and the
@@ -1263,7 +1288,8 @@ void m68k_trap(uint16_t raw){
         if(len && getenv("MRTRACE")) fprintf(stderr, "  [menu] item %d text ok\n", item);
     } break;
     case 0xA947: /*SetItem*/   { (void)pop32(); (void)pop16(); (void)pop32(); } break;
-    case 0xA934: /*ClearMenuBar*/ case 0xA937: /*DrawMenuBar*/ break;
+    case 0xA934: /*ClearMenuBar*/ g_nmenus=0; break;
+    case 0xA937: /*DrawMenuBar*/ break;
     case 0xA933: /*AppendMenu*/ case 0xA94D: /*AppendResMenu*/ { (void)pop32(); (void)pop32(); } break;
     case 0xA939: /*EnableItem*/ case 0xA93A: /*DisableItem*/ { (void)pop16(); (void)pop32(); } break;
     case 0xA945: /*CheckItem*/ { (void)pop16(); (void)pop16(); (void)pop32(); } break;
@@ -1279,13 +1305,13 @@ void m68k_trap(uint16_t raw){
      * higher user levels) and "Open Stack..." is item 2, which lands in
      * Standard File -- answered by MRDOC. */
     case 0xA93D: /*MenuSelect*/ case 0xA93E: /*MenuKey*/ {
-        if(w == 0xA93D) (void)pop32(); else (void)pop16();
+        int key = 0; if(w == 0xA93D) (void)pop32(); else key = pop16() & 0xFF;
         static int armed = -1; static uint32_t choice;
         if(armed < 0){ const char *e = getenv("MRMENU"); armed = 0;
             unsigned id, item;
             if(e && sscanf(e, "%u,%u", &id, &item) == 2){
                 choice = ((uint32_t)id << 16) | (item & 0xFFFFu); armed = 1; } }
-        uint32_t r = 0;
+        uint32_t r = w == 0xA93E ? menu_key(key) : 0;
         if(armed == 1){ r = choice; armed = 0;
             fprintf(stderr, "[menu] choosing menu %u item %u\n",
                     (unsigned)(r >> 16), (unsigned)(r & 0xFFFFu)); }
@@ -1858,6 +1884,9 @@ void m68k_trap(uint16_t raw){
         ret32((uint32_t)(int32_t)(((int64_t)a*(int64_t)b)>>16)); } break;
     case 0xA869: /*FixRatio*/ { int16_t den=(int16_t)pop16(), num=(int16_t)pop16();
         ret32(den ? (uint32_t)(int32_t)(((int32_t)num<<16)/den) : 0x7FFFFFFFu); } break;
+    /* How a title splits MenuSelect/MenuKey's answer into menu and item. */
+    case 0xA86A: /*HiWord*/ ret16((uint16_t)(pop32() >> 16)); break;
+    case 0xA86B: /*LoWord*/ ret16((uint16_t)pop32()); break;
     case 0xA86C: /*FixRound*/ { int32_t x=(int32_t)pop32();
         ret16((uint16_t)(int16_t)((x + 0x8000) >> 16)); } break;
     case 0xA861: /*Random*/ { g_rand = g_rand*1103515245u + 12345u;
