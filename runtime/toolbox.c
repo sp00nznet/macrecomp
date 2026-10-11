@@ -818,7 +818,8 @@ void m68k_trap(uint16_t raw){
     case 0xA89E: /*PenNormal*/ qd_pen_size(1,1); qd_pen_mode(0); qd_pen_pat_black(1); break;
     case 0xA89B: /*PenSize*/ { int16_t h=pop16(),ww=pop16(); qd_pen_size(ww,h); } break;
     case 0xA89C: /*PenMode*/ qd_pen_mode(pop16()); break;
-    case 0xA89D: /*PenPat*/ (void)pop32(); qd_pen_pat_black(1); break;
+    case 0xA89D: /*PenPat*/ { uint32_t pp=pop32(); uint8_t pat[8];
+        for(int i=0;i<8;i++) pat[i]=pp?(uint8_t)m68k_r8(pp+i):0xFF; qd_pen_pat(pat); } break;
     case 0xA887: /*TextFont*/ case 0xA888: /*TextFace*/ case 0xA88A: /*TextSize*/
         (void)pop16(); break;
     /* TextMode decides whether a glyph paints its background. Discarding it
@@ -868,7 +869,8 @@ void m68k_trap(uint16_t raw){
                 _r.top,_r.left,_r.bottom,_r.right,_c.top,_c.left,_c.bottom,_c.right,
                 (unsigned)(g_cur_port?m68k_r32(g_cur_port+2):0)); } Rect r=rd_rect(pop32()); qd_erase_rect(&r); } break;
     case 0xA8A4: /*InverRect*/ { Rect r=rd_rect(pop32()); qd_invert_rect(&r); } break;
-    case 0xA8A5: /*FillRect*/  { (void)pop32(); Rect r=rd_rect(pop32()); qd_fill_rect(&r,1); } break;
+    case 0xA8A5: /*FillRect*/  { uint32_t pp=pop32(); Rect r=rd_rect(pop32()); uint8_t pat[8];
+        for(int i=0;i<8;i++) pat[i]=pp?(uint8_t)m68k_r8(pp+i):0xFF; qd_fill_rect_pat(&r,pat); } break;
     case 0xA8B6: /*FrameOval*/ { Rect r=rd_rect(pop32()); qd_frame_oval(&r); } break;
     case 0xA8B7: /*PaintOval*/ { Rect r=rd_rect(pop32()); qd_fill_oval(&r,1); } break;
     case 0xA8B8: /*EraseOval*/ { Rect r=rd_rect(pop32()); qd_fill_oval(&r,0); } break;
@@ -1034,8 +1036,11 @@ void m68k_trap(uint16_t raw){
             set_target_from_bitmap(bm);
         }
         if(getenv("MRGFX")&&bm) fprintf(stderr,"[gfx] SetPortBits base=%x rb=%d\n",m68k_r32(bm),m68k_r16(bm+4)&0x3fff); } break;
-    case 0xA9B8: /*GetPattern*/ { (void)pop16(); uint32_t h=heap_alloc(4),p=heap_alloc(8);
-        for(int i=0;i<8;i++) M.mem[p+i]=0xFF; if(h)m68k_w32(h,p); ret32(h); } break;
+    /* GetPattern loads the title's own 'PAT ' resource; black only if it has none. */
+    case 0xA9B8: /*GetPattern*/ { int16_t id=(int16_t)pop16(); uint32_t h=res_get(0x50415420u,id);
+        if(!h){ uint32_t p=heap_alloc(8); h=heap_alloc(4);
+                for(int i=0;i<8;i++) M.mem[p+i]=0xFF; if(h)m68k_w32(h,p); }
+        ret32(h); } break;
 
     /* ---- Window Manager (thin: return a real WindowRecord so the game can draw) ---- */
     case 0xA913: /*NewWindow*/ {
@@ -1294,11 +1299,15 @@ void m68k_trap(uint16_t raw){
         uint32_t dbase=m68k_r32(dstB); int drb=m68k_r16(dstB+4)&0x3FFF;
         int dbt=(int16_t)m68k_r16(dstB+6), dbl=(int16_t)m68k_r16(dstB+8);
         Rect s=rd_rect(srp), d=rd_rect(drp);
-        if(getenv("MRGFX")) fprintf(stderr,"[gfx] CopyBits src=%x dst=%x sR=%d,%d,%d,%d dR=%d,%d,%d,%d\n",
-            sbase,dbase,s.top,s.left,s.bottom,s.right,d.top,d.left,d.bottom,d.right);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] CopyBits src=%x dst=%x sR=%d,%d,%d,%d dR=%d,%d,%d,%d mode=%d sb=%d,%d/%d db=%d,%d/%d\n",
+            sbase,dbase,s.top,s.left,s.bottom,s.right,d.top,d.left,d.bottom,d.right,
+            mode,sbt,sbl,srb,dbt,dbl,drb);
         int sw=s.right-s.left, sh=s.bottom-s.top, dw=d.right-d.left, dh=d.bottom-d.top;
         int src_screen=(sbase==screen_base()||sbase==0), dst_screen=(dbase==screen_base()||dbase==0);
-        int inv=((mode&0x24)==0x24);         /* notSrcCopy: invert */
+        /* Transfer modes: srcCopy/srcOr/srcXor/srcBic (0-3), +4 inverts the
+         * source. A masked sprite is two blits, srcBic with its mask then srcOr
+         * with the image; treating both as srcCopy drew every sprite as a box. */
+        int inv=(mode&4)!=0, op=mode&3;
         if(sw>0&&sh>0&&dw>0&&dh>0){
             for(int y=0;y<dh;y++){ int sy=(s.top-sbt)+y*sh/dh;
                 for(int x=0;x<dw;x++){ int sx=(s.left-sbl)+x*sw/dw; int bit=0;
@@ -1306,9 +1315,14 @@ void m68k_trap(uint16_t raw){
                     else if(srb>0){ uint32_t a=sbase+(uint32_t)sy*srb+(sx>>3); bit=a<M.memsize?(m68k_r8(a)>>(7-(sx&7)))&1:0; }
                     if(inv) bit=!bit;
                     int dpx=d.left+x, dpy=d.top+y;
-                    if(dst_screen){ qd_screen_put(dpx, dpy, bit); }
+                    if(op && !bit) continue;          /* or/xor/bic leave dst where src is white */
+                    if(dst_screen){
+                        if(op==2) bit=!qd_screen_get(dpx,dpy); else if(op==3) bit=0;
+                        qd_screen_put(dpx, dpy, bit); }
                     else if(drb>0){ int dlx=dpx-dbl,dly=dpy-dbt; if(dlx>=0&&dly>=0){ uint32_t a=dbase+(uint32_t)dly*drb+(dlx>>3);
-                        if(a<M.memsize){ uint8_t bb=m68k_r8(a),mk=0x80u>>(dlx&7); m68k_w8(a,bit?(bb|mk):(bb&(uint8_t)~mk)); } } }
+                        if(a<M.memsize){ uint8_t bb=m68k_r8(a),mk=0x80u>>(dlx&7);
+                            if(op==2) bit=!(bb&mk); else if(op==3) bit=0;
+                            m68k_w8(a,bit?(bb|mk):(bb&(uint8_t)~mk)); } } }
                 } }
         } } break;
 

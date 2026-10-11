@@ -63,6 +63,8 @@ void qd_port_restore(int was);
 void qd_erase_rect(const Rect *r);      /* fill white */
 void qd_invert_rect(const Rect *r);
 void qd_fill_rect(const Rect *r, int black);
+void qd_fill_rect_pat(const Rect *r, const uint8_t pat[8]);
+void qd_pen_pat(const uint8_t pat[8]);
 void qd_frame_oval(const Rect *r);
 void qd_fill_oval(const Rect *r, int black);
 void qd_draw_char(int c);
