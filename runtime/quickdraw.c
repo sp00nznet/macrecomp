@@ -206,6 +206,49 @@ void qd_draw_char(int c){
 int qd_text_width(int len){ return len*GLYPH_W; }
 void qd_draw_text(const uint8_t *p, int len){ for(int i=0;i<len;i++) qd_draw_char(p[i]); }
 
+/* A title's own 'FONT' resource (Inside Macintosh I-227): one strike of
+ * glyphs side by side, a location table into it and an offset/width table.
+ * Words: 1 firstChar, 2 lastChar, 4 kernMax, 7 fRectHeight, 8 owTLoc,
+ * 9 ascent, 10 descent, 12 rowWords; the strike starts at byte 26. Bold draws
+ * each glyph twice, a pixel apart, and widens it by one.
+ * ponytail: bold only; italic/outline/shadow draw plain. */
+static int fw(const uint8_t *f, int w){ return (int16_t)(f[2*w] << 8 | f[2*w+1]); }
+static int font_glyph(const uint8_t *f, int c){   /* index, or the missing glyph */
+    int first = fw(f,1), last = fw(f,2), miss = last - first + 1;
+    int i = (c < first || c > last) ? miss : c - first;
+    const uint8_t *ow = f + 16 + 2*fw(f,8);
+    if(ow[2*i] == 0xFF && ow[2*i+1] == 0xFF) i = miss;
+    return i;
+}
+static int font_adv(const uint8_t *f, int bold, int c){
+    const uint8_t *ow = f + 16 + 2*fw(f,8);
+    return ow[2*font_glyph(f,c)+1] + (bold ? 1 : 0);
+}
+int qd_font_width(const uint8_t *f, int bold, const uint8_t *p, int len){
+    int w = 0; for(int i=0;i<len;i++) w += font_adv(f,bold,p[i]); return w;
+}
+void qd_font_draw(const uint8_t *f, int bold, const uint8_t *p, int len){
+    int fh = fw(f,7), asc = fw(f,9), rw = 2*fw(f,12);
+    const uint8_t *bits = f + 26, *loc = bits + rw*fh, *ow = f + 16 + 2*fw(f,8);
+    /* Glyphs are ink in the port's colour, never the pen pattern: a title that
+     * last painted with a white pen still draws black text. srcOr/srcCopy set,
+     * srcXor inverts, srcBic clears; notSrcCopy (4) is white on black. */
+    int op = txt_mode & 3, ink = txt_mode == 4 ? 0 : 1;
+    for(int k=0;k<len;k++){
+        qd_char_trace(p[k]);
+        int i = font_glyph(f,p[k]), adv = font_adv(f,bold,p[k]);
+        if(txt_mode == 0 || txt_mode == 4)     /* srcCopy: the cell's background too */
+            for(int y=0;y<fh;y++) for(int x=0;x<adv;x++) put(pen_h+x, pen_v-asc+y, txt_mode == 4);
+        int l0 = loc[2*i] << 8 | loc[2*i+1], l1 = loc[2*i+2] << 8 | loc[2*i+3];
+        int x0 = pen_h + fw(f,4) + ow[2*i];
+        for(int y=0;y<fh;y++) for(int b=l0;b<l1;b++)
+            if(bits[y*rw + (b>>3)] >> (7-(b&7)) & 1)
+                for(int d=0; d<=bold; d++) { int px = x0 + b-l0 + d, py = pen_v-asc+y;
+                    put(px, py, op == 2 ? !getpix(px, py) : op == 3 ? 0 : ink); }
+        pen_h += adv;
+    }
+}
+
 /* MRCHARS=1: every glyph with the pen position it landed at, and which
  * bitmap it went into. Text that is laid out wrongly looks identical to
  * text that is drawn wrongly once it is pixels; the pen says which. */

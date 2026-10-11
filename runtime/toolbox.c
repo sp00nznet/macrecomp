@@ -332,6 +332,32 @@ static uint32_t res_get(uint32_t typelong, int id){
     return 0;
 }
 
+/* Text in the title's own fonts. A 'FONT' is looked up as the Resource
+ * Manager would (current file, then the application) and read from the host
+ * copy; family 0 (the system font) and any size the title does not carry fall
+ * back to the HAL's font. */
+static int g_txfont, g_txsize, g_txface;
+static int rsw(const uint8_t *f, int w){ return (int16_t)(f[2*w] << 8 | f[2*w+1]); }
+static const uint8_t *cur_font(void){
+    if(g_txfont == 0) return 0;
+    int id = g_txfont*128 + (g_txsize ? g_txsize : 12);
+    for(int pass = 0; pass < 2; pass++){
+        int f = pass == 0 ? g_curres : 1;
+        for(int i = 0; i < g_nres; i++)
+            if(g_res[i].file == f && g_res[i].id == id && strcmp(g_res[i].type, "FONT") == 0
+               && g_res[i].len >= 26) return g_res[i].data;
+    }
+    return 0;
+}
+static void text_draw(const uint8_t *p, int n){
+    const uint8_t *f = cur_font();
+    if(f) qd_font_draw(f, g_txface & 1, p, n); else qd_draw_text(p, n);
+}
+static int text_width(const uint8_t *p, int n){
+    const uint8_t *f = cur_font();
+    return f ? qd_font_width(f, g_txface & 1, p, n) : qd_text_width(n);
+}
+
 /* ---- trap normalization: strip auto-pop / flag bits ---- */
 /* Toolbox traps ($A800-$ABFF) carry a 10-bit trap number. OS traps carry a
  * 9-bit number with the flag bits above it -- bit 9 is "clear", bit 10 "sys" --
@@ -820,8 +846,11 @@ void m68k_trap(uint16_t raw){
     case 0xA89C: /*PenMode*/ qd_pen_mode(pop16()); break;
     case 0xA89D: /*PenPat*/ { uint32_t pp=pop32(); uint8_t pat[8];
         for(int i=0;i<8;i++) pat[i]=pp?(uint8_t)m68k_r8(pp+i):0xFF; qd_pen_pat(pat); } break;
-    case 0xA887: /*TextFont*/ case 0xA888: /*TextFace*/ case 0xA88A: /*TextSize*/
-        (void)pop16(); break;
+    /* The family, size and face choose a 'FONT' the title carries itself
+     * (id family*128+size); without one, text draws in the HAL's own font. */
+    case 0xA887: /*TextFont*/ g_txfont=(int16_t)pop16(); break;
+    case 0xA888: /*TextFace*/ g_txface=(int16_t)pop16(); break;
+    case 0xA88A: /*TextSize*/ g_txsize=(int16_t)pop16(); break;
     /* TextMode decides whether a glyph paints its background. Discarding it
      * leaves every draw an OR of black pixels, so redrawing text in place
      * never erases what was there -- the Home stack's clock field, rewritten
@@ -858,7 +887,7 @@ void m68k_trap(uint16_t raw){
 
     /* ---- QuickDraw: drawing ---- */
     case 0xA893: /*MoveTo*/ { int16_t v=pop16(),h=pop16(); qd_pen_to(h,v); } break;
-    case 0xA894: /*Move*/   { int16_t dv=pop16(),dh=pop16(); qd_pen_to(0,0); (void)dh;(void)dv; } break;
+    case 0xA894: /*Move*/   { int16_t dv=pop16(),dh=pop16(); int h,v; qd_get_pen(&h,&v); qd_pen_to(h+dh,v+dv); } break;
     case 0xA891: /*LineTo*/ { int16_t v=pop16(),h=pop16(); qd_line_to(h,v); } break;
     case 0xA892: /*Line*/   { int16_t dv=pop16(),dh=pop16(); qd_line(dh,dv); } break;
     case 0xA8A1: /*FrameRect*/ { Rect r=rd_rect(pop32()); qd_frame_rect(&r); } break;
@@ -884,7 +913,7 @@ void m68k_trap(uint16_t raw){
          * telling you exactly what went wrong, and reading it off a 1-bit
          * framebuffer is a great deal harder than reading it here. */
         if(getenv("MRTEXT")){ buf[len]=0; fprintf(stderr, "[text] %.*s\n", len, buf); }
-        qd_draw_text(buf,len); } break;
+        text_draw(buf,len); } break;
     /* An unimplemented Toolbox trap is not free: its arguments stay on the
      * guest stack. A few bytes lost per call walk the stack pointer away from
      * where the enclosing function saved its registers, so its epilogue movem
@@ -896,17 +925,19 @@ void m68k_trap(uint16_t raw){
         uint8_t t[256];
         for(int i=0;i<cnt;i++) t[i]=(uint8_t)m68k_r8(buf+(uint32_t)first+i);
         if(getenv("MRTEXT")) fprintf(stderr, "[text] %.*s\n", cnt, t);
-        qd_draw_text(t,cnt); } break;
+        text_draw(t,cnt); } break;
     case 0xA88B: /*GetFontInfo*/ { uint32_t info=pop32();
         /* ascent, descent, widMax, leading -- the 1-bit system font we draw. */
-        if(info){ m68k_w16(info,   9); m68k_w16(info+2, 3);
+        const uint8_t *f=cur_font();
+        if(info && f){ for(int i=0;i<4;i++) m68k_w16(info+2*i, (uint16_t)rsw(f, (int[]){9,10,3,11}[i])); }
+        else if(info){ m68k_w16(info,   9); m68k_w16(info+2, 3);
                   m68k_w16(info+4, qd_text_width(1)); m68k_w16(info+6, 1); } } break;
     case 0xA9BB: /*GetIcon*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x49434F4Eu/*ICON*/, id)); } break;
     case 0xA855: /*ShieldCursor*/ (void)pop32(); (void)pop32(); break;
     case 0xA883: /*DrawChar*/  { int c=pop16();
         if(getenv("MRGFX")){ int ph,pv; qd_get_pen(&ph,&pv);
             fprintf(stderr,"[gfx] DrawChar '%c' at %d,%d\n", (c>=32&&c<127)?c:46, ph, pv); }
-        qd_draw_char(c); } break;
+        { uint8_t ch=(uint8_t)c; text_draw(&ch,1); } } break;
 
     /* ---- events (thin) ---- */
     case 0xA975: /*TickCount*/ time_refresh(); ret32(plat_ticks()); break;
@@ -1831,10 +1862,13 @@ void m68k_trap(uint16_t raw){
         ret16((uint16_t)(int16_t)((x + 0x8000) >> 16)); } break;
     case 0xA861: /*Random*/ { g_rand = g_rand*1103515245u + 12345u;
         ret16((uint16_t)(g_rand>>16)); } break;
-    case 0xA88C: /*StringWidth*/ { uint32_t sp=pop32();
-        ret16((uint16_t)qd_text_width(sp?(int)m68k_r8(sp):0)); } break;
-    case 0xA886: /*TextWidth*/ { int16_t cnt=pop16(); (void)pop16(); (void)pop32();
-        ret16((uint16_t)qd_text_width(cnt<0?0:cnt)); } break;
+    case 0xA88C: /*StringWidth*/ { uint32_t sp=pop32(); uint8_t t[256]; int n=sp?(int)m68k_r8(sp):0;
+        for(int i=0;i<n;i++) t[i]=(uint8_t)m68k_r8(sp+1+i);
+        ret16((uint16_t)text_width(t,n)); } break;
+    case 0xA886: /*TextWidth*/ { int16_t cnt=pop16(), first=pop16(); uint32_t b=pop32(); uint8_t t[256];
+        if(cnt<0) cnt=0; if(cnt>255) cnt=255;
+        for(int i=0;i<cnt;i++) t[i]=(uint8_t)m68k_r8(b+(uint32_t)first+i);
+        ret16((uint16_t)text_width(t,cnt)); } break;
     /* One full-screen window at the origin, so global and local coincide. */
     case 0xA870: /*LocalToGlobal*/ case 0xA871: /*GlobalToLocal*/ (void)pop32(); break;
     case 0xA9F1: /*UnLoadSeg*/ (void)pop32(); break;   /* every segment is resident */
