@@ -56,7 +56,39 @@ static uint32_t screen_base(void){
 uint32_t mr_screen_base(void){ return screen_base(); }
 static uint32_t g_front_win;   /* the one card window, for FindWindow */
 static int g_update_pending;   /* an updateEvt the app has not been given yet */
-static int g_peek_valid, g_peek_what, g_peek_msg, g_peek_h, g_peek_v;
+
+/* The Event Manager's queue. GetNextEvent and EventAvail take the first event
+ * whose bit is in their eventMask and leave the rest queued, in order, as on a
+ * Mac. A title that polls with two masks otherwise loses events to the wrong
+ * poll: Shufflepuck asks for mouseDown in its bar loop and keyDown|updateEvt
+ * in its keyboard handler, and the keyboard handler swallowed every click.
+ * The platform still hands events over one at a time (plat_next_event, which
+ * a headless loader stubs), one per call, so a poll costs what it did.
+ * ponytail: full queue drops the newest, not the oldest; 32 is plenty here. */
+enum { EVQ_MAX = 32 };
+static struct { int what, msg, h, v; } g_evq[EVQ_MAX];
+static int g_nevq;
+static void ev_pull(void){
+    int w=0, m=0, h=0, v=0;
+    if(g_nevq < EVQ_MAX && plat_next_event(&w,&m,&h,&v) && w){
+        g_evq[g_nevq].what=w; g_evq[g_nevq].msg=m; g_evq[g_nevq].h=h; g_evq[g_nevq].v=v; g_nevq++; }
+}
+static int ev_take(int mask, int peek, int *what, int *msg, int *h, int *v){
+    ev_pull();
+    for(int i=0;i<g_nevq;i++){
+        if(!(mask & (1<<g_evq[i].what))) continue;
+        *what=g_evq[i].what; *msg=g_evq[i].msg; *h=g_evq[i].h; *v=g_evq[i].v;
+        if(!peek){ g_nevq--; for(int j=i;j<g_nevq;j++) g_evq[j]=g_evq[j+1]; }
+        return 1; }
+    return 0;
+}
+/* FlushEvents: drop every queued event whose bit is in mask, keeping the rest. */
+static void ev_flush(int mask){
+    for(int k=0; k<EVQ_MAX && g_nevq<EVQ_MAX; k++){ int n=g_nevq; ev_pull(); if(g_nevq==n) break; }
+    int n=0;
+    for(int i=0;i<g_nevq;i++) if(!(mask & (1<<g_evq[i].what))) g_evq[n++]=g_evq[i];
+    g_nevq=n;
+}
 
 /* WindowRecord past the 108-byte GrafPort: windowKind(108,2), visible(110,1),
  * hilited(111,1), goAwayFlag(112,1), spareFlag(113,1), strucRgn(114,4),
@@ -761,7 +793,12 @@ void m68k_trap(uint16_t raw){
         uint32_t h=pop32(); (void)pop16(); (void)pop16(); te_calc(h); } break;
     case 0xA813: { /*TEAutoView(auto,hTE)*/ (void)pop32(); (void)pop16(); } break;
     case 0xA811: /*TESelView*/ (void)pop32(); break;
-    case 0xA032: /*FlushEvents*/ (void)pop32(); break;
+    /* FlushEvents is an OS trap: D0 low word = eventMask, high = stopMask, and
+     * nothing on the stack. Popping 4 bytes here took the glue's return
+     * address, and the title's next rts left main (Shufflepuck quit the
+     * moment an opponent was picked).
+     * ponytail: stopMask ignored; every matching event goes. */
+    case 0xA032: /*FlushEvents*/ ev_flush((int)(uint16_t)M.d[0]); M.d[0]=0; break;
     case 0xA9F4: /*ExitToShell*/ fprintf(stderr,"[ExitToShell]\n"); plat_present(); exit(0);
 
     /* ---- QuickDraw: pen & text state ---- */
@@ -880,8 +917,9 @@ void m68k_trap(uint16_t raw){
      * an event, so a title that polls with EventAvail and then fetches with
      * GetNextEvent -- which is the ordinary idiom, and what HyperCard does,
      * five times more often than it fetches -- lost nearly all of them,
-     * mouse clicks included. One slot of pushback is enough to tell them
-     * apart. */
+     * mouse clicks included. ev_take peeks or takes, and honours the
+     * eventMask, which was popped and ignored until a two-mask title lost its
+     * clicks to its own keyboard poll. */
     case 0xA970: /*GetNextEvent*/ case 0xA971: /*EventAvail*/ {
         plat_present();                       /* reaching the event loop == booted */
         {   static int said;                  /* a milestone for harnesses to match */
@@ -930,17 +968,9 @@ void m68k_trap(uint16_t raw){
              * the only way to show navigation without a person at the mouse. */
             if(next < nclk && ++n >= clk[next].when){
                 plat_inject_click(clk[next].x, clk[next].y); next++; } }
-        uint32_t evp=pop32(); (void)pop16(); int what=0,msg=0,h=0,v=0;
+        uint32_t evp=pop32(); int mask=(uint16_t)pop16(); int what=0,msg=0,h=0,v=0;
         plat_pump();
-        int got;
-        if(g_peek_valid){
-            what=g_peek_what; msg=g_peek_msg; h=g_peek_h; v=g_peek_v; got=1;
-            if(!peek) g_peek_valid=0;
-        } else {
-            got = plat_next_event(&what,&msg,&h,&v);
-            if(got && peek){ g_peek_valid=1; g_peek_what=what; g_peek_msg=msg;
-                             g_peek_h=h; g_peek_v=v; }
-        }
+        int got = ev_take(mask, peek, &what,&msg,&h,&v);
         /* A Mac application draws a window's contents only when handed an
          * updateEvt, and nothing here raises one: the window gets shown and is
          * then never painted, which looks exactly like a title that failed to
@@ -954,7 +984,7 @@ void m68k_trap(uint16_t raw){
          * still treated as belonging to somebody else. Activate comes first:
          * the app expects to be told it owns the window before it is told to
          * paint it. modifiers bit 0 is activeFlag. */
-        if(!got){
+        if(!got && (mask & (1<<8))){
             for(int i=0;i<g_nwins;i++){
                 uint32_t wp = g_wins[i];
                 if(!wp || !g_win_activate[i] || !m68k_r8(wp+110)) continue;
@@ -965,7 +995,7 @@ void m68k_trap(uint16_t raw){
                 break;
             }
         }
-        if(!got){
+        if(!got && (mask & (1<<6))){
             /* One update per dirty, visible window. The pending flag is the
              * gate rather than the region itself, so a title that ignores the
              * event is not handed it again for ever. */
