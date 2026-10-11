@@ -44,8 +44,61 @@ static void syn_tick(void){
         if(++syn_live > lim) syn_live = 0; }
 }
 
+/* Headless mode and recording (the recomp house style's --headless --record).
+ * Frames go to ffmpeg's stdin as raw 8-bit gray; plat_present writes as many
+ * copies of the current frame as wall time says are due, so the video runs at
+ * real speed however irregularly the title presents. */
+#ifdef _WIN32
+#define popen _popen
+#define pclose _pclose
+#endif
+static int g_headless;
+static const char *g_record_path;
+static FILE *g_rec;
+static long g_rec_frames;
+static uint32_t g_watchdog_ms;
+enum { REC_FPS = 30 };
+
+void plat_config(int headless, const char *record, int watchdog_s){
+    g_headless = headless; g_record_path = record;
+    g_watchdog_ms = watchdog_s > 0 ? (uint32_t)watchdog_s * 1000u : 0;
+}
+
+/* Checked on present and on TickCount: a title stuck before its event loop
+ * still busy-waits on the clock, so the watchdog fires either way. */
+static void watchdog(uint32_t ms){
+    if(g_watchdog_ms && ms >= g_watchdog_ms){
+        fprintf(stderr, "[watchdog] %u s, exiting\n", g_watchdog_ms/1000u);
+        exit(0);
+    }
+}
+
+static void rec_close(void){
+    if(!g_rec) return;
+    pclose(g_rec); g_rec = NULL;
+    fprintf(stderr, "[record] %ld frames -> %s\n", g_rec_frames, g_record_path);
+}
+
+static void rec_open(void){
+    char cmd[1024];
+    /* nearest-neighbour 2x: 1-bit art smeared by a bilinear scale is unreadable */
+    snprintf(cmd, sizeof cmd, "ffmpeg -y -loglevel error -f rawvideo -pix_fmt gray "
+             "-s %dx%d -r %d -i - -vf scale=%d:%d:flags=neighbor -pix_fmt yuv420p \"%s\"",
+             QD_W, QD_H, REC_FPS, QD_W*2, QD_H*2, g_record_path);
+    g_rec = popen(cmd, "wb");
+    if(!g_rec){ fprintf(stderr, "[record] could not start ffmpeg (is it on PATH?)\n"); return; }
+    atexit(rec_close);   /* ExitToShell and the watchdog leave through exit() */
+}
+
 int plat_open(const char *title, int scale){
+    if(g_headless){
+        if(SDL_Init(SDL_INIT_TIMER|SDL_INIT_EVENTS)!=0){ fprintf(stderr,"SDL:%s\n",SDL_GetError()); return 1; }
+        start_ms = SDL_GetTicks();
+        if(g_record_path) rec_open();
+        return 0;
+    }
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)!=0){ fprintf(stderr,"SDL:%s\n",SDL_GetError()); return 1; }
+    if(g_record_path) rec_open();
     g_scale = scale>0?scale:2;
     win = SDL_CreateWindow(title?title:"macrecomp", SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED, QD_W*g_scale, QD_H*g_scale, SDL_WINDOW_SHOWN);
@@ -142,6 +195,14 @@ static int screen_px(int x, int y){ return qd_screen_get(x, y); }
 
 void plat_present(void){
     shot(); bmshot();
+    uint32_t ms = SDL_GetTicks() - start_ms;
+    if(g_rec){
+        static uint8_t frame[QD_W*QD_H];
+        for(int y=0;y<QD_H;y++) for(int x=0;x<QD_W;x++) frame[y*QD_W+x] = screen_px(x,y) ? 0 : 255;
+        long due = (long)ms * REC_FPS / 1000 + 1;
+        while(g_rec_frames < due && fwrite(frame, sizeof frame, 1, g_rec) == 1) g_rec_frames++;
+    }
+    watchdog(ms);
     if(!tex) return;
     uint32_t *px; int pitch;
     SDL_LockTexture(tex, NULL, (void**)&px, &pitch);
@@ -167,7 +228,7 @@ void plat_pump(void){
 int plat_quit_requested(void){ return quit_req; }
 void plat_get_mouse(int *h,int *v){ syn_tick(); if(syn_live){ if(h)*h=syn_x; if(v)*v=syn_y; return; } int x,y; SDL_GetMouseState(&x,&y); if(h)*h=x/g_scale; if(v)*v=y/g_scale; }
 int plat_button(void){ syn_tick(); if(syn_live) return syn_down > 0; return (SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(SDL_BUTTON_LEFT))!=0; }
-uint32_t plat_ticks(void){ return (SDL_GetTicks()-start_ms)*60u/1000u; }
+uint32_t plat_ticks(void){ uint32_t ms = SDL_GetTicks()-start_ms; watchdog(ms); return ms*60u/1000u; }
 
 /* Injected from the Toolbox HAL rather than counted here: this function is
  * also polled by the modal-dialog loop long before the title reaches its own
