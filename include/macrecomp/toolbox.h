@@ -37,6 +37,9 @@ typedef struct { int16_t v, h; } Point;
 extern uint8_t qd_fb[QD_H][QD_W];       /* 1 byte/pixel, 0=white 1=black (simple) */
 int  qd_screen_get(int x, int y);
 void qd_screen_put(int x, int y, int black);
+/* A pixel in the CURRENT port (screen or SetPortBits'd offscreen), clipped. */
+void qd_put(int h, int v, int black);
+int  qd_get(int h, int v);
 void qd_init(void);
 void qd_pen_to(int h, int v);
 void qd_get_pen(int *h, int *v);

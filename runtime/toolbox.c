@@ -537,34 +537,62 @@ static uint32_t unpackbits_row(uint32_t p, uint8_t *out, int rowbytes){
         else { int cnt=257-(uint8_t)(c&0xff); uint8_t v=(uint8_t)m68k_r8(p++); for(int i=0;i<cnt&&n<rowbytes;i++) out[n++]=v; } }
     return p;
 }
+/* DrawPicture for v1 PICTs. Every bitmap op is drawn, not just the first: a
+ * full-screen picture is often stored as a stack of 16-row bands (Shufflepuck's
+ * backgrounds are 22 of them), and stopping at the first left the rest of the
+ * screen black. Each op lands at its own dstRect, which is in picture
+ * coordinates and is mapped through picFrame -> dst, in the current port (a
+ * SetPortBits'd offscreen buffer as often as the screen), with its mode.
+ * ponytail: scaling is nearest-pixel per source pixel, so a stretched picture
+ * has gaps; titles here draw at 1:1. */
 static void draw_pict(uint32_t pic, Rect dst){
+    int ft=(int16_t)m68k_r16(pic+2), fl=(int16_t)m68k_r16(pic+4),
+        fb=(int16_t)m68k_r16(pic+6), fr=(int16_t)m68k_r16(pic+8);
+    int fw=fr-fl, fh=fb-ft;
+    int dw=dst.right-dst.left, dh=dst.bottom-dst.top;
+    if(fw<=0||fh<=0) return;
+    if(dw<=0) dw=fw; if(dh<=0) dh=fh;
     uint32_t o=pic+2+8;                 /* skip picSize + frame rect */
     for(int guard=0; guard<4096; guard++){
         uint8_t op=(uint8_t)m68k_r8(o++);
         if(op==0xFF) break;
-        if(op==0x90||op==0x98){          /* BitsRect / PackBitsRect */
+        if(op==0x90||op==0x91||op==0x98||op==0x99){   /* BitsRect / PackBitsRect (/Rgn) */
             int rowbytes=(int)m68k_r16(o); o+=2;
             int t=(int16_t)m68k_r16(o), l=(int16_t)m68k_r16(o+2),
                 b=(int16_t)m68k_r16(o+4), r=(int16_t)m68k_r16(o+6); o+=8;
-            o+=8+8+2;                    /* srcRect, dstRect, mode */
-            int w=r-l, h=b-t; if(rowbytes&0x8000||w<=0||h<=0||rowbytes>512) return;
+            int st=(int16_t)m68k_r16(o), sl=(int16_t)m68k_r16(o+2),
+                sb=(int16_t)m68k_r16(o+4), sr=(int16_t)m68k_r16(o+6); o+=8;
+            int dt=(int16_t)m68k_r16(o), dl=(int16_t)m68k_r16(o+2),
+                db=(int16_t)m68k_r16(o+4), dr=(int16_t)m68k_r16(o+6); o+=8;
+            int mode=(int16_t)m68k_r16(o); o+=2;
+            if(op&1) o+=m68k_r16(o);        /* maskRgn: its size word counts itself */
+            int w=r-l, h=b-t, sw=sr-sl, sh=sb-st;
+            if(rowbytes&0x8000||w<=0||h<=0||rowbytes>512||sw<=0||sh<=0) return;
             static uint8_t row[512];
-            int dw=dst.right-dst.left, dh=dst.bottom-dst.top;
-            if(dw<=0)dw=w; if(dh<=0)dh=h;
             for(int y=0;y<h;y++){
                 /* The row header holds the packed byte count. unpackbits_row
                  * stops on output length instead and returns the new offset,
                  * so the count is skipped, not read.
                  * ponytail: trusting the output length; bound the row by the
                  * header count if a malformed PICT ever over-reads. */
-                if(op==0x98){ o += rowbytes>250?2:1;
-                              uint32_t np=unpackbits_row(o,row,rowbytes); o=np; }
+                if(op&0x08){ o += rowbytes>250?2:1;
+                             o = unpackbits_row(o,row,rowbytes); }
                 else { for(int i=0;i<rowbytes;i++) row[i]=(uint8_t)m68k_r8(o+i); o+=rowbytes; }
-                int py=dst.top + y*dh/h;
-                for(int x=0;x<w;x++){ int bit=(row[x>>3]>>(7-(x&7)))&1;
-                    int px=dst.left + x*dw/w; qd_screen_put(px, py, bit); }
+                int sy=t+y; if(sy<st||sy>=sb) continue;
+                int py=dt+(sy-st)*(db-dt)/sh;                 /* picture coords */
+                int Y=dst.top+(py-ft)*dh/fh;                  /* port coords */
+                for(int x=0;x<w;x++){
+                    int sx=l+x; if(sx<sl||sx>=sr) continue;
+                    int bit=(row[x>>3]>>(7-(x&7)))&1;
+                    if(mode&4) bit=!bit;                      /* notSrc* */
+                    int X=dst.left+(dl+(sx-sl)*(dr-dl)/sw-fl)*dw/fw;
+                    switch(mode&3){
+                    case 0: qd_put(X,Y,bit); break;                     /* srcCopy */
+                    case 1: if(bit) qd_put(X,Y,1); break;               /* srcOr */
+                    case 2: if(bit) qd_put(X,Y,!qd_get(X,Y)); break;    /* srcXor */
+                    case 3: if(bit) qd_put(X,Y,0); break; }             /* srcBic */
+                }
             }
-            return;                      /* one bitmap is the picture */
         }
         else if(op==0x01){ int rs=(int)m68k_r16(o); o+=rs; }       /* clipRgn */
         else if(op==0xA1){ o+=2; int sz=(int)m68k_r16(o); o+=2+sz; }/* long comment */
@@ -1219,6 +1247,10 @@ void m68k_trap(uint16_t raw){
     /* ---- DrawPicture: blit real PICT art ---- */
     case 0xA8F6: /*DrawPicture*/ { uint32_t rp=pop32(); uint32_t pich=pop32();
         uint32_t pic = pich ? m68k_r32(pich) : 0; Rect dst = rd_rect(rp);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] DrawPicture h=%x frame=%d,%d,%d,%d dst=%d,%d,%d,%d into %x%s\n",
+            pich, pic?(int16_t)m68k_r16(pic+2):0, pic?(int16_t)m68k_r16(pic+4):0,
+            pic?(int16_t)m68k_r16(pic+6):0, pic?(int16_t)m68k_r16(pic+8):0,
+            dst.top,dst.left,dst.bottom,dst.right, g_cur_port?m68k_r32(g_cur_port+2):0, pic?"":" (empty handle)");
         if(pic) draw_pict(pic, dst);
         if(getenv("MRSHOTPICT")) plat_present(); } break;
 
@@ -1420,7 +1452,8 @@ void m68k_trap(uint16_t raw){
             want, nlen, nlen ? (const char *)(M.mem + nm + 1) : "", found);
         m68k_w32(SP, found);
     } break;
-    case 0xA9BC: /*GetPicture*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x50494354u,id)); } break; /*'PICT'*/
+    case 0xA9BC: /*GetPicture*/ { int16_t id=pop16(); uint32_t h=res_get(0x50494354u,id); m68k_w32(SP, h);
+        if(getenv("MRGFX")) fprintf(stderr,"[gfx] GetPicture %d -> %x\n", id, h); } break; /*'PICT'*/
     case 0xA9BF: /*GetRMenu/GetMenu*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x4D454E55u,id)); } break; /*'MENU'*/
     case 0xA9BA: /*GetString*/ { int16_t id=pop16(); m68k_w32(SP, res_get(0x53545220u,id)); } break; /*'STR '*/
     case 0xA9A5: /*SizeRsrc*/ { uint32_t h=pop32(); uint32_t sz=0;
