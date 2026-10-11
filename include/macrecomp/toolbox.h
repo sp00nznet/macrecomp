@@ -73,6 +73,9 @@ void qd_fill_oval(const Rect *r, int black);
 void qd_draw_char(int c);
 int  qd_text_width(int len);   /* width of len chars in the current font */
 void qd_draw_text(const uint8_t *p, int len);
+/* The same in a 'FONT' resource's strike (bold: 0 or 1). */
+int  qd_font_width(const uint8_t *f, int bold, const uint8_t *p, int len);
+void qd_font_draw(const uint8_t *f, int bold, const uint8_t *p, int len);
 /* CopyBits: blit a 1-bit source into the framebuffer (core of the game's art). */
 void qd_copybits(const uint8_t *src, int src_rowbytes, int sw, int sh,
                  const Rect *srcR, const Rect *dstR, int mode);

@@ -15,9 +15,16 @@ All notable changes to this project are documented here. Format follows
 - **Scripted input** (`plat_script`, #5): mouse moves, clicks and key presses
   by wall-clock time, for a title's `--move`/`--click`/`--key`. Opt-in; SDL
   builds.
+- **A title's own fonts** (#6): TextFont/TextSize/TextFace pick the title's
+  `FONT` resource (id family*128+size) for DrawString, DrawText, DrawChar,
+  StringWidth, TextWidth and GetFontInfo; bold widens by one. Default on when
+  the resource exists; otherwise text keeps the HAL's 5x7 font, so HyperCard
+  (whose only FONT is -16500) is unchanged.
 
 ### Fixed
 
+- **Move reset the pen to 0,0** (#6). Text centred with `StringWidth` then
+  `Move(-w/2, 0)` drew at the port's corner: Shufflepuck's champion board.
 - **DrawPicture drew only the first band of a picture, on the screen** (#2).
   A full-screen 1-bit PICT is often a stack of 16-row bands, drawn into an
   offscreen buffer. Every op is now placed at its own dstRect, with its mode,

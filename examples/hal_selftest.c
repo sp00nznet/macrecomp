@@ -390,6 +390,35 @@ static void test_files(void){
     remove(path);
 }
 
+/* A two-glyph 'FONT' (A: 2 px wide in the strike, advance 3; B: 3 px at
+ * offset 1, advance 4; a 1 px missing glyph, advance 2), selected with
+ * TextFont/TextSize, measured and drawn through the traps. Move is relative. */
+static void test_fonts(void){
+    printf("fonts\n");
+    static const uint8_t f[] = {
+        0x90,0x00, 0,'A', 0,'B', 0,4, 0,0, 0,0, 0,6, 0,2, 0,11, 0,2, 0,0, 0,0, 0,1,
+        0xF8,0x00, 0xC0,0x00,                  /* strike: 2 rows of 1 word */
+        0,0, 0,2, 0,5, 0,6,                    /* locTable */
+        0x00,0x03, 0x01,0x04, 0x00,0x02, 0xFF,0xFF };   /* owTable */
+    res_add("FONT", 200*128 + 12, f, (int)sizeof f);
+    push16(200); TRAP(0xA887); push16(12); TRAP(0xA88A);
+    call_begin(2); push32(pstr("AB?")); TRAP(0xA88C);
+    CHECK(call_end32() == 9, "StringWidth AB? in the FONT should be 3+4+2");
+    push16(1); TRAP(0xA888);
+    call_begin(2); push32(pstr("AB?")); TRAP(0xA88C);
+    CHECK(call_end32() == 12, "bold widens each glyph by one");
+    push16(0); TRAP(0xA888);
+    push16(10); push16(20); TRAP(0xA893); push32(pstr("AB")); TRAP(0xA884);
+    CHECK(qd_screen_get(10,18) && qd_screen_get(11,19) && !qd_screen_get(12,19), "A's 2x2 block at 10,18");
+    CHECK(!qd_screen_get(13,18) && qd_screen_get(14,18) && qd_screen_get(16,18) && !qd_screen_get(14,19),
+          "B drawn at its offset, one row");
+    int h, v; qd_get_pen(&h, &v);
+    CHECK(h == 17 && v == 20, "pen advances 3+4 to 17,20, got %d,%d", h, v);
+    push16(5); push16((uint16_t)-3); TRAP(0xA894); qd_get_pen(&h, &v);
+    CHECK(h == 22 && v == 17, "Move(5,-3) from 17,20 is 22,17, got %d,%d", h, v);
+    push16(0); TRAP(0xA887);
+}
+
 int main(void){
     M.memsize = 8u*1024*1024; M.mem = calloc(1,M.memsize);
     SP = 0x100000;
@@ -401,6 +430,7 @@ int main(void){
     test_memory();
     test_textedit();
     test_files();
+    test_fonts();
     draw_scene();
 
     if(g_fail){ printf("HAL selftest: %d check(s) FAILED\n", g_fail); return 1; }
