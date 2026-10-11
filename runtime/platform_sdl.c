@@ -212,7 +212,40 @@ void plat_present(void){
     SDL_RenderClear(ren); SDL_RenderCopy(ren,tex,NULL,NULL); SDL_RenderPresent(ren);
 }
 
+/* Scripted input (a title's --move/--click/--key). Steps fire by wall-clock
+ * time, checked wherever the guest can observe input. After the first scripted
+ * move or click the mouse stays where the script put it: a headless run has
+ * no real mouse to fall back to. */
+/* The table grows: a whole match of strokes is thousands of steps, and a
+ * fixed table that dropped the rest froze the mouse partway through. */
+typedef struct { char kind; int x, y; uint32_t ms; } ScrStep;
+static ScrStep *scr;
+static int nscr, scr_cap, scr_next, scr_mouse;
+void plat_script(char kind, int x, int y, double secs){
+    if(nscr == scr_cap){
+        ScrStep *g = realloc(scr, (size_t)(scr_cap ? scr_cap*2 : 1024) * sizeof *g);
+        if(!g){ fprintf(stderr, "[script] out of memory\n"); exit(1); }
+        scr = g; scr_cap = scr_cap ? scr_cap*2 : 1024;
+    }
+    uint32_t ms = (uint32_t)(secs * 1000.0);
+    int i = nscr++;
+    while(i > 0 && scr[i-1].ms > ms){ scr[i] = scr[i-1]; i--; }   /* stable sort by time */
+    scr[i].kind = kind; scr[i].x = x; scr[i].y = y; scr[i].ms = ms;
+}
+static void script_tick(void){
+    if(scr_next >= nscr) return;
+    uint32_t ms = SDL_GetTicks() - start_ms;
+    for(; scr_next < nscr && scr[scr_next].ms <= ms; scr_next++){
+        int x = scr[scr_next].x, y = scr[scr_next].y;
+        if(scr[scr_next].kind == 'm'){ syn_x = x; syn_y = y; scr_mouse = 1; }
+        else if(scr[scr_next].kind == 'c'){ scr_mouse = 1; plat_inject_click(x, y); }
+        else if(scr[scr_next].kind == 'k'){ evpush(3/*keyDown*/, x, 0, 0);
+                                            fprintf(stderr, "[key] %d\n", x); }
+    }
+}
+
 void plat_pump(void){
+    script_tick();
     SDL_Event e;
     while(SDL_PollEvent(&e)){
         /* Nothing polls plat_quit_requested, so closing the window has to
@@ -226,9 +259,9 @@ void plat_pump(void){
 }
 
 int plat_quit_requested(void){ return quit_req; }
-void plat_get_mouse(int *h,int *v){ syn_tick(); if(syn_live){ if(h)*h=syn_x; if(v)*v=syn_y; return; } int x,y; SDL_GetMouseState(&x,&y); if(h)*h=x/g_scale; if(v)*v=y/g_scale; }
-int plat_button(void){ syn_tick(); if(syn_live) return syn_down > 0; return (SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(SDL_BUTTON_LEFT))!=0; }
-uint32_t plat_ticks(void){ uint32_t ms = SDL_GetTicks()-start_ms; watchdog(ms); return ms*60u/1000u; }
+void plat_get_mouse(int *h,int *v){ script_tick(); syn_tick(); if(syn_live || scr_mouse){ if(h)*h=syn_x; if(v)*v=syn_y; return; } int x,y; SDL_GetMouseState(&x,&y); if(h)*h=x/g_scale; if(v)*v=y/g_scale; }
+int plat_button(void){ script_tick(); syn_tick(); if(syn_live || scr_mouse) return syn_down > 0; return (SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(SDL_BUTTON_LEFT))!=0; }
+uint32_t plat_ticks(void){ uint32_t ms = SDL_GetTicks()-start_ms; watchdog(ms); script_tick(); return ms*60u/1000u; }
 
 /* Injected from the Toolbox HAL rather than counted here: this function is
  * also polled by the modal-dialog loop long before the title reaches its own

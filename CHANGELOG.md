@@ -6,8 +6,33 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Headless mode, mp4 recording and a watchdog** (`plat_config`, #1): no
+  window, frames piped to ffmpeg at 30 fps of wall time, and a clean exit after
+  N seconds so the recording is finalised. Opt-in; SDL builds. Also prints
+  `[boot] event loop reached` once, for harnesses.
+- **Scripted input** (`plat_script`, #5): mouse moves, clicks and key presses
+  by wall-clock time, for a title's `--move`/`--click`/`--key`. Opt-in; SDL
+  builds.
+
 ### Fixed
 
+- **DrawPicture drew only the first band of a picture, on the screen** (#2).
+  A full-screen 1-bit PICT is often a stack of 16-row bands, drawn into an
+  offscreen buffer. Every op is now placed at its own dstRect, with its mode,
+  into the current port. Found by Shufflepuck Cafe, whose title, bar and table
+  are 22 bands each.
+- **GetNextEvent ignored its event mask; FlushEvents took its masks from the
+  stack** (#3). The first event went to whichever poll asked, so Shufflepuck's
+  keyboard poll swallowed its clicks; the Event Manager now keeps a queue and
+  honours the mask. FlushEvents is an OS trap (masks in D0) and popping the
+  stack took the glue's return address, so the title left main.
+- **The pen had no pattern, and CopyBits had no transfer modes** (#4). PenPat,
+  GetPattern ('PAT ' resources) and FillRect now carry real 8x8 patterns
+  through the pen mode, so a patterned fade-in no longer paints solid black.
+  CopyBits applies srcCopy/srcOr/srcXor/srcBic and their inverses, so a masked
+  sprite (srcBic mask, srcOr image) no longer draws as a box.
 - **`find_entries.py` could not see a byte-indexed computed jump.** It read
   every `jmp d(pc,Dn.w)` table as 16-bit offsets, which finds nothing when the
   arms are named by single bytes -- the Duff's-device form, where
