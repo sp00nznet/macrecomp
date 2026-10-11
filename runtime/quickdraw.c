@@ -36,7 +36,11 @@ void qd_screen_put(int x, int y, int black){
 }
 
 static int pen_h, pen_v, pen_w = 1, pen_h_sz = 1;
-static int pen_black = 1;          /* current pen pattern: 1 black, 0 white */
+static int pen_black = 1;          /* pen pattern has any black: for ops without patterns */
+/* The pen is an 8x8 pattern, not a colour: a title fades a scene in by painting
+ * it with a run of ever-lighter patterns (Shufflepuck's PAT 2300-2310), and a
+ * solid pen turned every step of that fade solid black. */
+static uint8_t pen_pat[8] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static int pen_mode = 0;           /* 0 = patCopy (srcCopy-ish) */
 static int txt_mode = 1;           /* srcOr: the default for a new port */
 static Rect clip = { 0, 0, QD_H, QD_W };
@@ -97,7 +101,19 @@ void qd_get_clip(Rect *r){ if(r) *r=clip; }
 void qd_pen_size(int w, int h){ pen_w=w>0?w:1; pen_h_sz=h>0?h:1; }
 void qd_pen_mode(int mode){ pen_mode=mode; }
 void qd_text_mode(int mode){ txt_mode=mode; }
-void qd_pen_pat_black(int black){ pen_black=black?1:0; }
+void qd_pen_pat_black(int black){ pen_black=black?1:0; memset(pen_pat, black?0xFF:0, 8); }
+void qd_pen_pat(const uint8_t p[8]){ memcpy(pen_pat,p,8); pen_black=0; for(int i=0;i<8;i++) if(p[i]) pen_black=1; }
+/* One pen pixel: the pattern, aligned to port coordinates, through the pen
+ * mode. patCopy/patOr/patXor/patBic are 8-11 (0-3 accepted too), +4 inverts. */
+static void pen_put(int h, int v){
+    int bit = (pen_pat[v&7] >> (7-(h&7))) & 1;
+    if(pen_mode & 4) bit = !bit;
+    switch(pen_mode & 3){
+    case 0: put(h,v,bit); break;
+    case 1: if(bit) put(h,v,1); break;
+    case 2: if(bit) put(h,v,!getpix(h,v)); break;
+    case 3: if(bit) put(h,v,0); break; }
+}
 void qd_pen_to(int h, int v){ pen_h=h; pen_v=v; }
 void qd_get_pen(int *h, int *v){ if(h)*h=pen_h; if(v)*v=pen_v; }
 
@@ -105,7 +121,7 @@ static void hspan(int x0, int x1, int y, int black){
     if (x0>x1){ int t=x0;x0=x1;x1=t; } for(int x=x0;x<=x1;x++) put(x,y,black);
 }
 static void thick(int h, int v, int black){
-    for(int dy=0;dy<pen_h_sz;dy++) for(int dx=0;dx<pen_w;dx++) put(h+dx,v+dy,black);
+    (void)black; for(int dy=0;dy<pen_h_sz;dy++) for(int dx=0;dx<pen_w;dx++) pen_put(h+dx,v+dy);
 }
 
 void qd_line_to(int h, int v){
@@ -121,7 +137,13 @@ void qd_line(int dh, int dv){ qd_line_to(pen_h+dh, pen_v+dv); }
 void qd_fill_rect(const Rect *r, int black){
     for(int y=r->top;y<r->bottom;y++) for(int x=r->left;x<r->right;x++) put(x,y,black);
 }
-void qd_paint_rect(const Rect *r){ qd_fill_rect(r, pen_black); }
+void qd_paint_rect(const Rect *r){
+    for(int y=r->top;y<r->bottom;y++) for(int x=r->left;x<r->right;x++) pen_put(x,y);
+}
+void qd_fill_rect_pat(const Rect *r, const uint8_t p[8]){   /* FillRect: patCopy */
+    for(int y=r->top;y<r->bottom;y++) for(int x=r->left;x<r->right;x++)
+        put(x,y,(p[y&7]>>(7-(x&7)))&1);
+}
 void qd_erase_rect(const Rect *r){ qd_fill_rect(r, 0); }
 void qd_invert_rect(const Rect *r){
     for(int y=r->top;y<r->bottom;y++) for(int x=r->left;x<r->right;x++) put(x,y,!getpix(x,y));
